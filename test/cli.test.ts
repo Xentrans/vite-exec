@@ -69,13 +69,21 @@ describe("vite-exec", () => {
     const { stdout, exitCode } = await run(["--help"]);
     assert.equal(exitCode, 0);
     assert.ok(stdout.includes("Usage:"));
-    assert.ok(stdout.includes("--config"));
+    assert.ok(stdout.includes("--verbose"));
   });
 
   it("prints version with --version", async () => {
     const { stdout, exitCode } = await run(["--version"]);
     assert.equal(exitCode, 0);
     assert.match(stdout.trim(), /^\d+\.\d+\.\d+$/);
+  });
+
+  it("resolves tsconfig path aliases", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/alias-project/main.ts`,
+    ]);
+    assert.equal(stdout.trim(), "hello world");
+    assert.equal(exitCode, 0);
   });
 
   it("prints diagnostic info with --verbose", async () => {
@@ -87,7 +95,5 @@ describe("vite-exec", () => {
     assert.equal(stdout.trim(), "hello world");
     assert.ok(stderr.includes("vite-exec v"));
     assert.ok(stderr.includes("vite v"));
-    assert.ok(stderr.includes("Config:"));
-    assert.ok(stderr.includes("Script:"));
   });
 });

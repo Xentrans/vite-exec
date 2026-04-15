@@ -31,5 +31,8 @@
     "typescript",
     "cli"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "vite-tsconfig-paths": "^6.1.1"
+  }
 }

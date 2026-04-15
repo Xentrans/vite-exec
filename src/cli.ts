@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
 import { parseArgs } from "node:util";
-import { resolve, relative } from "node:path";
+import { resolve } from "node:path";
 import { accessSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createServer, isRunnableDevEnvironment } from "vite";
-import type { ViteDevServer } from "vite";
+import {
+  resolveConfig,
+  createRunnableDevEnvironment,
+  createServerModuleRunner,
+  type RunnableDevEnvironment,
+  type ServerModuleRunnerOptions,
+} from "vite";
+import tsconfigPaths from "vite-tsconfig-paths";
 
 const help = `
 Usage: vite-exec [options] <file> [-- ...args]
@@ -13,9 +19,7 @@ Usage: vite-exec [options] <file> [-- ...args]
 Run a JS/TS file through Vite's transform pipeline.
 
 Options:
-  -c, --config <path>  Path to a Vite config file
-      --root <path>    Project root directory
-      --verbose        Show Vite logs and diagnostic info
+      --verbose        Show diagnostic info
   -h, --help           Show this help message
   -v, --version        Show version
 `.trim();
@@ -36,7 +40,6 @@ async function getViteVersion(): Promise<string> {
 }
 
 function parseCliArgs(args: string[]) {
-  // Split on -- to separate our flags from forwarded args
   const ddIndex = args.indexOf("--");
   const ownArgs = ddIndex === -1 ? args : args.slice(0, ddIndex);
   const forwardedArgs = ddIndex === -1 ? [] : args.slice(ddIndex + 1);
@@ -44,8 +47,6 @@ function parseCliArgs(args: string[]) {
   const { values, positionals } = parseArgs({
     args: ownArgs,
     options: {
-      config: { type: "string", short: "c" },
-      root: { type: "string" },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -54,20 +55,6 @@ function parseCliArgs(args: string[]) {
   });
 
   return { values, positionals, forwardedArgs };
-}
-
-let server: ViteDevServer | undefined;
-
-function registerSignalHandlers() {
-  const handler = async (signal: string) => {
-    if (server) {
-      await server.close();
-    }
-    process.exit(signal === "SIGINT" ? 130 : 143);
-  };
-
-  process.on("SIGINT", () => handler("SIGINT"));
-  process.on("SIGTERM", () => handler("SIGTERM"));
 }
 
 async function main() {
@@ -92,7 +79,6 @@ async function main() {
     process.exit(1);
   }
 
-  const root = values.root ? resolve(process.cwd(), values.root) : process.cwd();
   const resolvedPath = resolve(process.cwd(), filePath);
 
   try {
@@ -103,52 +89,58 @@ async function main() {
   }
 
   const verbose = values.verbose ?? false;
-  const configPath = values.config
-    ? resolve(process.cwd(), values.config)
-    : false;
 
   if (verbose) {
     const version = await getVersion();
     const viteVersion = await getViteVersion();
-    const displayConfig = configPath
-      ? relative(process.cwd(), configPath) || configPath
-      : "(none)";
-    const displayRoot = relative(process.cwd(), root) || ".";
-    const displayScript = relative(process.cwd(), resolvedPath) || resolvedPath;
-
     console.error(`vite-exec v${version} | vite v${viteVersion}`);
-    console.error(`Config: ${displayConfig}`);
-    console.error(`Root:   ${displayRoot}`);
-    console.error(`Script: ${displayScript}`);
     console.error("---");
   }
 
-  registerSignalHandlers();
+  const config = await resolveConfig(
+    {
+      configFile: false,
+      envDir: false,
+      logLevel: verbose ? "info" : "silent",
+      plugins: [tsconfigPaths()],
+      environments: {
+        exec: {
+          consumer: "server",
+          dev: { moduleRunnerTransform: true },
+          resolve: { external: true, mainFields: [], conditions: ["node", "module-sync"] },
+        },
+      },
+    },
+    "serve",
+  );
 
-  server = await createServer({
-    configFile: configPath,
-    root,
-    logLevel: verbose ? "info" : "silent",
-    server: { middlewareMode: true, hmr: false, ws: false },
-    optimizeDeps: { noDiscovery: true },
-  });
+  const environment: RunnableDevEnvironment = createRunnableDevEnvironment(
+    "exec",
+    config,
+    {
+      runner(env: RunnableDevEnvironment, opts?: ServerModuleRunnerOptions) {
+        const runner = createServerModuleRunner(env, {
+          ...opts,
+          hmr: { logger: false },
+        });
+        // Bypass strict named-export checking for externalized modules.
+        // Vite's default processImport throws when a type-only export
+        // (e.g. `import { Relation } from "typeorm"`) is imported without
+        // the `type` keyword. Like Vitest, we relax this check.
+        // @ts-expect-error processImport is private in Vite's types
+        runner.processImport = (exports: Record<string, unknown>) => exports;
+        return runner;
+      },
+      hot: false,
+    },
+  );
 
-  const ssr = server.environments.ssr;
+  await environment.init();
 
-  if (!isRunnableDevEnvironment(ssr)) {
-    console.error(
-      "Error: SSR environment is not runnable.\n" +
-        "If using --config, your config may override the SSR environment to a non-runnable type.",
-    );
-    await server.close();
-    process.exit(1);
-  }
-
-  // Rewrite process.argv so the script sees the forwarded args
   process.argv = [process.execPath, resolvedPath, ...forwardedArgs];
 
   try {
-    await ssr.runner.import(resolvedPath);
+    await environment.runner.import(resolvedPath);
   } catch (err) {
     if (verbose && err instanceof Error) {
       console.error(err);
@@ -157,11 +149,11 @@ async function main() {
     } else {
       console.error("Error:", err);
     }
-    await server.close();
+    await environment.close();
     process.exit(1);
   }
 
-  await server.close();
+  await environment.close();
   process.exit(0);
 }
 
