@@ -1,0 +1,35 @@
+{
+  "name": "vite-exec",
+  "version": "0.1.0",
+  "description": "Run JS/TS files through Vite's transform pipeline — a modern replacement for vite-node",
+  "type": "module",
+  "bin": {
+    "vite-exec": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "vite": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.8.0",
+    "vite": "^8.0.0"
+  },
+  "keywords": [
+    "vite",
+    "vite-node",
+    "module-runner",
+    "typescript",
+    "cli"
+  ],
+  "license": "MIT"
+}
