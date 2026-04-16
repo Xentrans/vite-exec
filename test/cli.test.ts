@@ -86,6 +86,16 @@ describe("vite-exec", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("preloads modules with -r flag", async () => {
+    const { stdout, exitCode } = await run([
+      "-r",
+      `${FIXTURES}/preload.ts`,
+      `${FIXTURES}/check-preload.ts`,
+    ]);
+    assert.equal(stdout.trim(), "preloaded: true");
+    assert.equal(exitCode, 0);
+  });
+
   it("prints diagnostic info with --verbose", async () => {
     const { stdout, stderr, exitCode } = await run([
       "--verbose",

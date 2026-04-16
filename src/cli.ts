@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { parseArgs } from "node:util";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { accessSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import {
@@ -19,6 +21,7 @@ Usage: vite-exec [options] <file> [-- ...args]
 Run a JS/TS file through Vite's transform pipeline.
 
 Options:
+  -r, --require <mod>  Preload a module before running the script (repeatable)
       --verbose        Show diagnostic info
   -h, --help           Show this help message
   -v, --version        Show version
@@ -32,9 +35,8 @@ async function getVersion(): Promise<string> {
 }
 
 async function getViteVersion(): Promise<string> {
-  const { createRequire } = await import("node:module");
-  const require = createRequire(import.meta.url);
-  const vitePkgPath = require.resolve("vite/package.json");
+  const selfRequire = createRequire(import.meta.url);
+  const vitePkgPath = selfRequire.resolve("vite/package.json");
   const pkg = JSON.parse(await readFile(vitePkgPath, "utf-8"));
   return pkg.version as string;
 }
@@ -47,6 +49,7 @@ function parseCliArgs(args: string[]) {
   const { values, positionals } = parseArgs({
     args: ownArgs,
     options: {
+      require: { type: "string", short: "r", multiple: true, default: [] },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -140,6 +143,16 @@ async function main() {
   process.argv = [process.execPath, resolvedPath, ...forwardedArgs];
 
   try {
+    for (const mod of values.require ?? []) {
+      if (mod.startsWith(".") || mod.startsWith("/")) {
+        await environment.runner.import(resolve(process.cwd(), mod));
+      } else {
+        const cwdRequire = createRequire(
+          pathToFileURL(resolve(process.cwd(), "noop.js")).href,
+        );
+        await import(cwdRequire.resolve(mod));
+      }
+    }
     await environment.runner.import(resolvedPath);
   } catch (err) {
     if (verbose && err instanceof Error) {
@@ -153,8 +166,10 @@ async function main() {
     process.exit(1);
   }
 
-  await environment.close();
-  process.exit(0);
+  // Clean up the environment once the event loop drains, but don't
+  // prevent Node from exiting naturally (unlike process.exit, this
+  // lets pending promises, timers, and I/O complete first).
+  process.on("beforeExit", () => environment.close());
 }
 
 main();
