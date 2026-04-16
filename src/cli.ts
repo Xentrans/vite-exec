@@ -2,7 +2,7 @@
 
 import { parseArgs } from "node:util";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { resolve, extname, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { accessSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -24,6 +24,11 @@ Run a JS/TS file through Vite's transform pipeline.
 Options:
   -r, --require <mod>  Preload a module before running the script (repeatable)
   -w, --watch          Re-run the script when files change
+  -e, --ext <exts>     Extensions to watch, comma-separated (default: ts,js,mjs,mts,json)
+  -i, --ignore <pat>   Ignore pattern for watch mode (repeatable)
+  -d, --delay <ms>     Debounce delay in ms for watch restarts (default: 200)
+      --clear          Clear screen before each restart
+  -q, --quiet          Suppress [vite-exec] messages
       --verbose        Show diagnostic info
   -h, --help           Show this help message
   -v, --version        Show version
@@ -53,6 +58,11 @@ function parseCliArgs(args: string[]) {
     options: {
       require: { type: "string", short: "r", multiple: true, default: [] },
       watch: { type: "boolean", short: "w", default: false },
+      ext: { type: "string", short: "e" },
+      ignore: { type: "string", short: "i", multiple: true, default: [] },
+      delay: { type: "string", short: "d" },
+      clear: { type: "boolean", default: false },
+      quiet: { type: "boolean", short: "q", default: false },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -175,57 +185,109 @@ async function main() {
   process.on("beforeExit", () => environment.close());
 }
 
+const DEFAULT_WATCH_EXTS = new Set(["ts", "js", "mjs", "mts", "json"]);
+
 async function watchMode(args: string[]) {
   const cliPath = new URL(import.meta.url).pathname;
+  const { values } = parseCliArgs(args);
 
-  // Strip --watch / -w from args before passing to child
-  const childArgs = args.filter((a) => a !== "--watch" && a !== "-w");
+  // Strip watch-only flags from args before passing to child
+  const watchOnlyFlags = new Set(["--watch", "-w", "--clear", "-q", "--quiet"]);
+  const watchOnlyWithValue = new Set(["--ext", "-e", "--ignore", "-i", "--delay", "-d"]);
+  const childArgs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (watchOnlyFlags.has(args[i])) continue;
+    if (watchOnlyWithValue.has(args[i])) { i++; continue; }
+    childArgs.push(args[i]);
+  }
+
+  const watchExts = values.ext
+    ? new Set(values.ext.split(",").map((e) => e.trim().replace(/^\./, "")))
+    : DEFAULT_WATCH_EXTS;
+  const delay = values.delay ? parseInt(values.delay, 10) : 200;
+  const clearScreen = values.clear ?? false;
+  const quiet = values.quiet ?? false;
+
+  const ignoredPatterns = [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/bower_components/**",
+    "**/.nyc_output/**",
+    "**/coverage/**",
+    "**/.sass-cache/**",
+    "**/dist/**",
+    ...(values.ignore ?? []),
+  ];
 
   let child: ChildProcess | undefined;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+  function log(msg: string) {
+    if (!quiet) console.error(msg);
+  }
+
   function spawnChild() {
+    if (clearScreen) process.stderr.write("\x1Bc");
     child = spawn(process.execPath, [cliPath, ...childArgs], {
       stdio: [0, 1, 2],
     });
     child.on("exit", (code) => {
       child = undefined;
       if (code !== null && code !== 0) {
-        console.error(`\n[vite-exec] process exited with code ${code}, waiting for changes...`);
+        log(`\n[vite-exec] process exited with code ${code}, waiting for changes...`);
       }
     });
   }
 
-  function restart(trigger: string) {
+  function restart(filePath: string) {
+    const ext = extname(filePath).slice(1);
+    if (ext && !watchExts.has(ext)) return;
+
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      console.error(`\n[vite-exec] change detected: ${trigger}, restarting...`);
+      const display = relative(process.cwd(), filePath) || filePath;
+      log(`\n[vite-exec] change detected: ${display}, restarting...`);
       if (child) {
         child.on("exit", () => spawnChild());
         child.kill("SIGTERM");
       } else {
         spawnChild();
       }
-    }, 200);
+    }, delay);
+  }
+
+  // Listen for manual restart via stdin
+  if (process.stdin.isTTY) {
+    process.stdin.setEncoding("utf-8");
+    process.stdin.resume();
+    let buf = "";
+    process.stdin.on("data", (data: string) => {
+      buf += data;
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.trim() === "rs") {
+          log("[vite-exec] manual restart");
+          if (child) {
+            child.on("exit", () => spawnChild());
+            child.kill("SIGTERM");
+          } else {
+            spawnChild();
+          }
+        }
+      }
+    });
   }
 
   const { watch: chokidarWatch } = await import("chokidar");
   const watcher = chokidarWatch(process.cwd(), {
     ignoreInitial: true,
-    ignored: [
-      "**/node_modules/**",
-      "**/.git/**",
-      "**/bower_components/**",
-      "**/.nyc_output/**",
-      "**/coverage/**",
-      "**/.sass-cache/**",
-      "**/dist/**",
-    ],
+    ignored: ignoredPatterns,
   });
   watcher.on("all", (_event, filePath) => restart(filePath));
   watcher.on("error", (err) => {
     if ((err as NodeJS.ErrnoException).code === "EMFILE") {
-      console.error("[vite-exec] too many open files — try closing other programs or raising ulimit");
+      log("[vite-exec] too many open files — try closing other programs or raising ulimit");
     }
   });
 
@@ -238,7 +300,8 @@ async function watchMode(args: string[]) {
     process.exit(143);
   });
 
-  console.error("[vite-exec] watching for changes...");
+  const extList = [...watchExts].join(",");
+  log(`[vite-exec] watching for changes (ext: ${extList}, delay: ${delay}ms)...`);
   spawnChild();
 }
 

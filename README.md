@@ -30,9 +30,20 @@ npx vite-exec -r dotenv/config script.ts
 # Watch mode — re-runs on file changes
 npx vite-exec --watch script.ts
 
+# Watch only specific extensions
+npx vite-exec -w -e ts,json script.ts
+
+# Watch with custom ignore patterns and delay
+npx vite-exec -w -i "*.test.ts" -d 500 script.ts
+
+# Clear screen before each restart
+npx vite-exec -w --clear script.ts
+
 # Enable verbose output
 npx vite-exec --verbose script.ts
 ```
+
+During watch mode, type `rs` + Enter to manually restart.
 
 ## CLI Flags
 
@@ -40,6 +51,11 @@ npx vite-exec --verbose script.ts
 |---|---|
 | `-r, --require <mod>` | Preload a module before running the script (repeatable) |
 | `-w, --watch` | Re-run the script when files change |
+| `-e, --ext <exts>` | Extensions to watch, comma-separated (default: `ts,js,mjs,mts,json`) |
+| `-i, --ignore <pat>` | Ignore pattern for watch mode (repeatable) |
+| `-d, --delay <ms>` | Debounce delay in ms for watch restarts (default: 200) |
+| `--clear` | Clear screen before each restart |
+| `-q, --quiet` | Suppress `[vite-exec]` messages |
 | `--verbose` | Show diagnostic info |
 | `-h, --help` | Show help |
 | `-v, --version` | Show version |
