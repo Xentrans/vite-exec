@@ -27,7 +27,7 @@ describe("vite-exec", () => {
     assert.equal(exitCode, 0);
   });
 
-  it("forwards arguments after -- to the script", async () => {
+  it("passes -- through to the script", async () => {
     const { stdout, exitCode } = await run([
       `${FIXTURES}/args.ts`,
       "--",
@@ -36,7 +36,18 @@ describe("vite-exec", () => {
       "--verbose",
     ]);
     const args = JSON.parse(stdout.trim());
-    assert.deepEqual(args, ["--port", "3000", "--verbose"]);
+    assert.deepEqual(args, ["--", "--port", "3000", "--verbose"]);
+    assert.equal(exitCode, 0);
+  });
+
+  it("forwards arguments after the file without requiring --", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/args.ts`,
+      "--port",
+      "3000",
+    ]);
+    const args = JSON.parse(stdout.trim());
+    assert.deepEqual(args, ["--port", "3000"]);
     assert.equal(exitCode, 0);
   });
 

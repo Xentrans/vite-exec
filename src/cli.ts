@@ -17,7 +17,7 @@ import {
 import tsconfigPaths from "vite-tsconfig-paths";
 
 const help = `
-Usage: vite-exec [options] <file> [-- ...args]
+Usage: vite-exec [options] <file> [...args]
 
 Run a JS/TS file through Vite's transform pipeline.
 
@@ -48,25 +48,64 @@ async function getViteVersion(): Promise<string> {
   return pkg.version as string;
 }
 
+const cliOptions = {
+  require: { type: "string" as const, short: "r", multiple: true, default: [] },
+  watch: { type: "boolean" as const, short: "w", default: false },
+  ext: { type: "string" as const, short: "e" },
+  ignore: { type: "string" as const, short: "i", multiple: true, default: [] },
+  delay: { type: "string" as const, short: "d" },
+  clear: { type: "boolean" as const, default: false },
+  quiet: { type: "boolean" as const, short: "q", default: false },
+  verbose: { type: "boolean" as const, default: false },
+  help: { type: "boolean" as const, short: "h", default: false },
+  version: { type: "boolean" as const, short: "v", default: false },
+};
+
 function parseCliArgs(args: string[]) {
-  const ddIndex = args.indexOf("--");
-  const ownArgs = ddIndex === -1 ? args : args.slice(0, ddIndex);
-  const forwardedArgs = ddIndex === -1 ? [] : args.slice(ddIndex + 1);
+  // Split args: everything before the file is for vite-exec,
+  // everything after is forwarded to the script. An explicit
+  // -- also works as a separator.
+  //
+  // Examples:
+  //   vite-exec --verbose script.ts --port 3000
+  //   vite-exec -r dotenv/config script.ts --port 3000
+  //   vite-exec script.ts -- --flag   (-- is forwarded to the script too)
+
+  const ownArgs: string[] = [];
+  let forwardedArgs: string[] = [];
+  let fileIndex = -1;
+
+  for (let i = 0; i < args.length; i++) {
+    // -- before the file separates our flags from the script path + args
+    if (args[i] === "--" && fileIndex < 0) {
+      forwardedArgs = args.slice(i + 1);
+      break;
+    }
+    // Everything after the file is forwarded (including --)
+    if (fileIndex >= 0) {
+      forwardedArgs = args.slice(i);
+      break;
+    }
+    if (!args[i].startsWith("-")) {
+      fileIndex = i;
+      ownArgs.push(args[i]);
+      continue;
+    }
+    ownArgs.push(args[i]);
+    // If this flag takes a value, consume the next arg too
+    const flagName = args[i].replace(/^-+/, "").split("=")[0];
+    const matchedOption = Object.entries(cliOptions).find(
+      ([name, opt]) => name === flagName || ("short" in opt && opt.short === flagName),
+    );
+    if (matchedOption && matchedOption[1].type === "string" && !args[i].includes("=")) {
+      i++;
+      if (i < args.length) ownArgs.push(args[i]);
+    }
+  }
 
   const { values, positionals } = parseArgs({
     args: ownArgs,
-    options: {
-      require: { type: "string", short: "r", multiple: true, default: [] },
-      watch: { type: "boolean", short: "w", default: false },
-      ext: { type: "string", short: "e" },
-      ignore: { type: "string", short: "i", multiple: true, default: [] },
-      delay: { type: "string", short: "d" },
-      clear: { type: "boolean", default: false },
-      quiet: { type: "boolean", short: "q", default: false },
-      verbose: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
-      version: { type: "boolean", short: "v", default: false },
-    },
+    options: cliOptions,
     allowPositionals: true,
   });
 

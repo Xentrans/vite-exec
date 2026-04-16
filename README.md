@@ -21,8 +21,8 @@ npm install -D vite-exec vite
 # Run a TypeScript file
 npx vite-exec script.ts
 
-# Forward arguments to the script
-npx vite-exec script.ts -- --port 3000
+# Forward arguments to the script (everything after the file)
+npx vite-exec script.ts --port 3000
 
 # Preload a module (like node -r)
 npx vite-exec -r dotenv/config script.ts
