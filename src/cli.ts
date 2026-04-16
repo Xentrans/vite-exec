@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { accessSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   resolveConfig,
   createRunnableDevEnvironment,
@@ -22,6 +23,7 @@ Run a JS/TS file through Vite's transform pipeline.
 
 Options:
   -r, --require <mod>  Preload a module before running the script (repeatable)
+  -w, --watch          Re-run the script when files change
       --verbose        Show diagnostic info
   -h, --help           Show this help message
   -v, --version        Show version
@@ -50,6 +52,7 @@ function parseCliArgs(args: string[]) {
     args: ownArgs,
     options: {
       require: { type: "string", short: "r", multiple: true, default: [] },
+      watch: { type: "boolean", short: "w", default: false },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -172,4 +175,76 @@ async function main() {
   process.on("beforeExit", () => environment.close());
 }
 
-main();
+async function watchMode(args: string[]) {
+  const cliPath = new URL(import.meta.url).pathname;
+
+  // Strip --watch / -w from args before passing to child
+  const childArgs = args.filter((a) => a !== "--watch" && a !== "-w");
+
+  let child: ChildProcess | undefined;
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function spawnChild() {
+    child = spawn(process.execPath, [cliPath, ...childArgs], {
+      stdio: [0, 1, 2],
+    });
+    child.on("exit", (code) => {
+      child = undefined;
+      if (code !== null && code !== 0) {
+        console.error(`\n[vite-exec] process exited with code ${code}, waiting for changes...`);
+      }
+    });
+  }
+
+  function restart(trigger: string) {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      console.error(`\n[vite-exec] change detected: ${trigger}, restarting...`);
+      if (child) {
+        child.on("exit", () => spawnChild());
+        child.kill("SIGTERM");
+      } else {
+        spawnChild();
+      }
+    }, 200);
+  }
+
+  const { watch: chokidarWatch } = await import("chokidar");
+  const watcher = chokidarWatch(process.cwd(), {
+    ignoreInitial: true,
+    ignored: [
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/bower_components/**",
+      "**/.nyc_output/**",
+      "**/coverage/**",
+      "**/.sass-cache/**",
+      "**/dist/**",
+    ],
+  });
+  watcher.on("all", (_event, filePath) => restart(filePath));
+  watcher.on("error", (err) => {
+    if ((err as NodeJS.ErrnoException).code === "EMFILE") {
+      console.error("[vite-exec] too many open files — try closing other programs or raising ulimit");
+    }
+  });
+
+  process.on("SIGINT", () => {
+    if (child) child.kill("SIGTERM");
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    if (child) child.kill("SIGTERM");
+    process.exit(143);
+  });
+
+  console.error("[vite-exec] watching for changes...");
+  spawnChild();
+}
+
+const args = process.argv.slice(2);
+if (args.includes("--watch") || args.includes("-w")) {
+  watchMode(args);
+} else {
+  main();
+}

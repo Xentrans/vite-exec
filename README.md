@@ -24,6 +24,12 @@ npx vite-exec script.ts
 # Forward arguments to the script
 npx vite-exec script.ts -- --port 3000
 
+# Preload a module (like node -r)
+npx vite-exec -r dotenv/config script.ts
+
+# Watch mode — re-runs on file changes
+npx vite-exec --watch script.ts
+
 # Enable verbose output
 npx vite-exec --verbose script.ts
 ```
@@ -32,6 +38,8 @@ npx vite-exec --verbose script.ts
 
 | Flag | Description |
 |---|---|
+| `-r, --require <mod>` | Preload a module before running the script (repeatable) |
+| `-w, --watch` | Re-run the script when files change |
 | `--verbose` | Show diagnostic info |
 | `-h, --help` | Show help |
 | `-v, --version` | Show version |
