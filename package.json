@@ -34,7 +34,6 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "chokidar": "^5.0.0",
-    "vite-tsconfig-paths": "^6.1.1"
+    "chokidar": "^5.0.0"
   }
 }

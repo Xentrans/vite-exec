@@ -14,7 +14,6 @@ import {
   type RunnableDevEnvironment,
   type ServerModuleRunnerOptions,
 } from "vite";
-import tsconfigPaths from "vite-tsconfig-paths";
 
 const help = `
 Usage: vite-exec [options] <file> [...args]
@@ -157,7 +156,7 @@ async function main() {
       configFile: false,
       envDir: false,
       logLevel: verbose ? "info" : "silent",
-      plugins: [tsconfigPaths()],
+      resolve: { tsconfigPaths: true },
       environments: {
         exec: {
           consumer: "server",

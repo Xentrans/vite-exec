@@ -79,7 +79,7 @@ During watch mode, type `rs` + Enter to manually restart.
 import { db } from "@/lib/database";
 ```
 
-Powered by [vite-tsconfig-paths](https://github.com/aleclarson/vite-tsconfig-paths).
+Powered by Vite's built-in `resolve.tsconfigPaths` option.
 
 ## How it works
 
