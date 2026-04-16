@@ -10,10 +10,8 @@ no WebSocket, no HMR — just transform and execute.
 ## Installation
 
 ```bash
-npm install -D vite-exec vite
+npm install -D vite-exec
 ```
-
-`vite` is a peer dependency — you need it installed in your project.
 
 ## Usage
 
