@@ -96,6 +96,23 @@ describe("vite-exec", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("handles type-only re-exports without the type keyword", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/type-export/main.ts`,
+    ]);
+    assert.equal(stdout.trim(), "alice");
+    assert.equal(exitCode, 0);
+  });
+
+  it("waits for pending async work to complete", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/pending-async.ts`,
+    ]);
+    assert.ok(stdout.includes("start"));
+    assert.ok(stdout.includes("done"));
+    assert.equal(exitCode, 0);
+  });
+
   it("prints diagnostic info with --verbose", async () => {
     const { stdout, stderr, exitCode } = await run([
       "--verbose",

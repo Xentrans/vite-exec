@@ -3,7 +3,7 @@
 import { parseArgs } from "node:util";
 import { createRequire } from "node:module";
 import { resolve, extname, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { accessSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -182,29 +182,51 @@ async function main() {
   // Clean up the environment once the event loop drains, but don't
   // prevent Node from exiting naturally (unlike process.exit, this
   // lets pending promises, timers, and I/O complete first).
-  process.on("beforeExit", () => environment.close());
+  let closing = false;
+  process.on("beforeExit", () => {
+    if (!closing) {
+      closing = true;
+      environment.close();
+    }
+  });
 }
 
 const DEFAULT_WATCH_EXTS = new Set(["ts", "js", "mjs", "mts", "json"]);
 
-async function watchMode(args: string[]) {
-  const cliPath = new URL(import.meta.url).pathname;
-  const { values } = parseCliArgs(args);
-
-  // Strip watch-only flags from args before passing to child
-  const watchOnlyFlags = new Set(["--watch", "-w", "--clear", "-q", "--quiet"]);
-  const watchOnlyWithValue = new Set(["--ext", "-e", "--ignore", "-i", "--delay", "-d"]);
+function buildChildArgs(args: string[]): string[] {
+  // Use parseCliArgs to properly handle combined short flags (e.g. -wq),
+  // then reconstruct child args from the parsed values — excluding
+  // watch-only options.
+  const { values, positionals, forwardedArgs } = parseCliArgs(args);
   const childArgs: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (watchOnlyFlags.has(args[i])) continue;
-    if (watchOnlyWithValue.has(args[i])) { i++; continue; }
-    childArgs.push(args[i]);
+
+  for (const mod of values.require ?? []) {
+    childArgs.push("-r", mod);
   }
+  if (values.verbose) childArgs.push("--verbose");
+
+  childArgs.push(...positionals);
+
+  if (forwardedArgs.length > 0) {
+    childArgs.push("--", ...forwardedArgs);
+  }
+
+  return childArgs;
+}
+
+async function watchMode(args: string[]) {
+  const cliPath = fileURLToPath(import.meta.url);
+  const { values } = parseCliArgs(args);
+  const childArgs = buildChildArgs(args);
 
   const watchExts = values.ext
     ? new Set(values.ext.split(",").map((e) => e.trim().replace(/^\./, "")))
     : DEFAULT_WATCH_EXTS;
   const delay = values.delay ? parseInt(values.delay, 10) : 200;
+  if (Number.isNaN(delay)) {
+    console.error("Error: --delay must be a number");
+    process.exit(1);
+  }
   const clearScreen = values.clear ?? false;
   const quiet = values.quiet ?? false;
 
@@ -220,6 +242,7 @@ async function watchMode(args: string[]) {
   ];
 
   let child: ChildProcess | undefined;
+  let restarting = false;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   function log(msg: string) {
@@ -227,9 +250,10 @@ async function watchMode(args: string[]) {
   }
 
   function spawnChild() {
+    restarting = false;
     if (clearScreen) process.stderr.write("\x1Bc");
     child = spawn(process.execPath, [cliPath, ...childArgs], {
-      stdio: [0, 1, 2],
+      stdio: ["ignore", "inherit", "inherit"],
     });
     child.on("exit", (code) => {
       child = undefined;
@@ -237,6 +261,17 @@ async function watchMode(args: string[]) {
         log(`\n[vite-exec] process exited with code ${code}, waiting for changes...`);
       }
     });
+  }
+
+  function killAndRestart() {
+    if (restarting) return;
+    if (child) {
+      restarting = true;
+      child.once("exit", () => spawnChild());
+      child.kill("SIGTERM");
+    } else {
+      spawnChild();
+    }
   }
 
   function restart(filePath: string) {
@@ -247,12 +282,7 @@ async function watchMode(args: string[]) {
     debounceTimer = setTimeout(() => {
       const display = relative(process.cwd(), filePath) || filePath;
       log(`\n[vite-exec] change detected: ${display}, restarting...`);
-      if (child) {
-        child.on("exit", () => spawnChild());
-        child.kill("SIGTERM");
-      } else {
-        spawnChild();
-      }
+      killAndRestart();
     }, delay);
   }
 
@@ -268,12 +298,7 @@ async function watchMode(args: string[]) {
       for (const line of lines) {
         if (line.trim() === "rs") {
           log("[vite-exec] manual restart");
-          if (child) {
-            child.on("exit", () => spawnChild());
-            child.kill("SIGTERM");
-          } else {
-            spawnChild();
-          }
+          killAndRestart();
         }
       }
     });
@@ -306,8 +331,10 @@ async function watchMode(args: string[]) {
 }
 
 const args = process.argv.slice(2);
-if (args.includes("--watch") || args.includes("-w")) {
-  watchMode(args);
-} else {
-  main();
-}
+const run = args.includes("--watch") || args.includes("-w")
+  ? watchMode(args)
+  : main();
+run.catch((err: unknown) => {
+  console.error(err instanceof Error ? `Error: ${err.message}` : err);
+  process.exit(1);
+});

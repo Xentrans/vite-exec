@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "pretest": "npm run build",
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "engines": {
