@@ -60,7 +60,6 @@ const cliOptions = {
   version: { type: "boolean" as const, short: "v", default: false },
 };
 
-// Map of short flag char → option definition, for value-consumption lookup.
 const shortFlagMap = new Map(
   Object.values(cliOptions)
     .filter((opt) => "short" in opt)
@@ -95,19 +94,16 @@ function parseCliArgs(args: string[]) {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    // -- before the file separates our flags from the script path + args
     if (arg === "--") {
       forwardedArgs = args.slice(i + 1);
       break;
     }
     if (!arg.startsWith("-")) {
-      // File path found; everything after is forwarded (including --)
       ownArgs.push(arg);
       forwardedArgs = args.slice(i + 1);
       break;
     }
     ownArgs.push(arg);
-    // If this flag takes a value, consume the next arg too.
     if (optionTakesValue(arg) && i + 1 < args.length) {
       ownArgs.push(args[++i]);
     }
@@ -235,6 +231,10 @@ async function main() {
   // Clean up the environment once the event loop drains, but don't
   // prevent Node from exiting naturally (unlike process.exit, this
   // lets pending promises, timers, and I/O complete first).
+  //
+  // The `closing` flag prevents re-entry: environment.close()'s async
+  // work can keep the loop alive long enough for beforeExit to fire a
+  // second time, which without the guard would loop indefinitely.
   let closing = false;
   process.on("beforeExit", () => {
     if (!closing) {
@@ -247,9 +247,10 @@ async function main() {
 const DEFAULT_WATCH_EXTS = new Set(["ts", "js", "mjs", "mts", "json"]);
 
 function buildChildArgs(args: string[]): string[] {
-  // Use parseCliArgs to properly handle combined short flags (e.g. -wq),
-  // then reconstruct child args from the parsed values — excluding
-  // watch-only options.
+  // Reconstruct args from parsed values (not string manipulation) so
+  // combined shorts like -wq don't leak. Watch-only options are
+  // intentionally dropped — critically, -w is stripped so the child
+  // runs main() instead of re-entering watchMode() and forking forever.
   const { values, positionals, forwardedArgs } = parseCliArgs(args);
   const childArgs: string[] = [];
 
@@ -313,6 +314,9 @@ async function watchMode(args: string[]) {
   }
 
   function killAndRestart() {
+    // Coalesce overlapping restart requests: while a kill is in flight,
+    // further triggers (debounce fire, stdin 'rs', another file change)
+    // would each attach a new exit listener and spawn extra children.
     if (restarting) return;
     if (child) {
       restarting = true;
@@ -335,7 +339,8 @@ async function watchMode(args: string[]) {
     }, delay);
   }
 
-  // Listen for manual restart via stdin
+  // Manual restart via 'rs' + Enter, but only in TTY mode — otherwise
+  // we'd steal stdin from scripts that read from it (piped input, tests).
   if (process.stdin.isTTY) {
     process.stdin.setEncoding("utf-8");
     process.stdin.resume();
@@ -360,11 +365,15 @@ async function watchMode(args: string[]) {
   });
   watcher.on("all", (_event, filePath) => restart(filePath));
   watcher.on("error", (err) => {
+    // Only surface EMFILE with a helpful hint; chokidar emits many
+    // transient errors (e.g. ENOENT on rapidly deleted files) that
+    // would spam the user without adding useful information.
     if ((err as NodeJS.ErrnoException).code === "EMFILE") {
       log("[vite-exec] too many open files — try closing other programs or raising ulimit");
     }
   });
 
+  // Exit codes: 128 + signal number, per POSIX shell convention.
   for (const [signal, exitCode] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
     process.on(signal, () => {
       if (child) child.kill("SIGTERM");
