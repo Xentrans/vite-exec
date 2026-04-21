@@ -51,6 +51,21 @@ describe("vite-exec", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("consumes the value for a short flag that takes an argument", async () => {
+    // -e ts must be recognized as flag + value (not two positionals);
+    // the file path is the first non-flag arg after the value.
+    const { stdout, exitCode } = await run([
+      "-e",
+      "ts",
+      `${FIXTURES}/args.ts`,
+      "--port",
+      "3000",
+    ]);
+    const args = JSON.parse(stdout.trim());
+    assert.deepEqual(args, ["--port", "3000"]);
+    assert.equal(exitCode, 0);
+  });
+
   it("exits with code 1 when the script throws", async () => {
     const { exitCode, stderr } = await run([`${FIXTURES}/exit-code.ts`]);
     assert.equal(exitCode, 1);

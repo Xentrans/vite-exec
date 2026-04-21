@@ -91,10 +91,19 @@ function parseCliArgs(args: string[]) {
       continue;
     }
     ownArgs.push(args[i]);
-    // If this flag takes a value, consume the next arg too
-    const flagName = args[i].replace(/^-+/, "").split("=")[0];
+    // If this flag takes a value, consume the next arg too.
+    // For long flags (--foo), the whole name is the key.
+    // For short flag clusters (-abc), only the LAST char can be a
+    // value-taking flag (node's parseArgs parses -wr as -w -r, where
+    // only -r takes a value). For the plain single-letter case -x,
+    // slice(-1) returns "x", so both cases use the same lookup.
+    const isLongFlag = args[i].startsWith("--");
+    const keyRaw = args[i].replace(/^-+/, "").split("=")[0];
+    const lookupKey = isLongFlag ? keyRaw : keyRaw.slice(-1);
     const matchedOption = Object.entries(cliOptions).find(
-      ([name, opt]) => name === flagName || ("short" in opt && opt.short === flagName),
+      ([name, opt]) =>
+        (isLongFlag && name === lookupKey) ||
+        (!isLongFlag && "short" in opt && opt.short === lookupKey),
     );
     if (matchedOption && matchedOption[1].type === "string" && !args[i].includes("=")) {
       i++;
@@ -243,11 +252,7 @@ function buildChildArgs(args: string[]): string[] {
   }
   if (values.verbose) childArgs.push("--verbose");
 
-  childArgs.push(...positionals);
-
-  if (forwardedArgs.length > 0) {
-    childArgs.push("--", ...forwardedArgs);
-  }
+  childArgs.push(...positionals, ...forwardedArgs);
 
   return childArgs;
 }

@@ -93,7 +93,7 @@ Powered by Vite's built-in `resolve.tsconfigPaths` option.
 |---|---|---|
 | **Vite API** | Built-in `ModuleRunner` | Custom ViteNodeServer/ViteNodeRunner |
 | **Server** | No dev server | Full Vite dev server |
-| **Dependencies** | Only `vite` (peer dep) | `vite-node` package + internals |
+| **Dependencies** | `vite` + `chokidar` | `vite-node` package + internals |
 | **Vite version** | Requires Vite 8+ | Works with older Vite versions |
 | **Config** | None (clean environment) | Loads vite.config by default |
 | **Maintenance** | Uses stable Vite APIs | Recommends migrating to Environment API |
