@@ -33,18 +33,18 @@ Options:
   -v, --version        Show version
 `.trim();
 
-async function getVersion(): Promise<string> {
-  const pkg = JSON.parse(
-    await readFile(new URL("../package.json", import.meta.url), "utf-8"),
-  );
+async function readPkgVersion(pkgPath: string | URL): Promise<string> {
+  const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
   return pkg.version as string;
 }
 
-async function getViteVersion(): Promise<string> {
-  const selfRequire = createRequire(import.meta.url);
-  const vitePkgPath = selfRequire.resolve("vite/package.json");
-  const pkg = JSON.parse(await readFile(vitePkgPath, "utf-8"));
-  return pkg.version as string;
+function getVersion(): Promise<string> {
+  return readPkgVersion(new URL("../package.json", import.meta.url));
+}
+
+function getViteVersion(): Promise<string> {
+  const vitePkgPath = createRequire(import.meta.url).resolve("vite/package.json");
+  return readPkgVersion(vitePkgPath);
 }
 
 const cliOptions = {
@@ -60,6 +60,26 @@ const cliOptions = {
   version: { type: "boolean" as const, short: "v", default: false },
 };
 
+// Map of short flag char → option definition, for value-consumption lookup.
+const shortFlagMap = new Map(
+  Object.values(cliOptions)
+    .filter((opt) => "short" in opt)
+    .map((opt) => [opt.short!, opt]),
+);
+
+function optionTakesValue(arg: string): boolean {
+  // For long flags (--foo), the whole name is the key.
+  // For short flag clusters (-abc), only the LAST char can be a
+  // value-taking flag (node's parseArgs parses -wr as -w -r, where
+  // only -r takes a value). For the plain single-letter case -x,
+  // slice(-1) returns "x", so both cases use the same lookup.
+  const key = arg.replace(/^-+/, "").split("=")[0];
+  const opt = arg.startsWith("--")
+    ? cliOptions[key as keyof typeof cliOptions]
+    : shortFlagMap.get(key.slice(-1));
+  return opt?.type === "string" && !arg.includes("=");
+}
+
 function parseCliArgs(args: string[]) {
   // Split args: everything before the file is for vite-exec,
   // everything after is forwarded to the script. An explicit
@@ -72,42 +92,24 @@ function parseCliArgs(args: string[]) {
 
   const ownArgs: string[] = [];
   let forwardedArgs: string[] = [];
-  let fileIndex = -1;
 
   for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     // -- before the file separates our flags from the script path + args
-    if (args[i] === "--" && fileIndex < 0) {
+    if (arg === "--") {
       forwardedArgs = args.slice(i + 1);
       break;
     }
-    // Everything after the file is forwarded (including --)
-    if (fileIndex >= 0) {
-      forwardedArgs = args.slice(i);
+    if (!arg.startsWith("-")) {
+      // File path found; everything after is forwarded (including --)
+      ownArgs.push(arg);
+      forwardedArgs = args.slice(i + 1);
       break;
     }
-    if (!args[i].startsWith("-")) {
-      fileIndex = i;
-      ownArgs.push(args[i]);
-      continue;
-    }
-    ownArgs.push(args[i]);
+    ownArgs.push(arg);
     // If this flag takes a value, consume the next arg too.
-    // For long flags (--foo), the whole name is the key.
-    // For short flag clusters (-abc), only the LAST char can be a
-    // value-taking flag (node's parseArgs parses -wr as -w -r, where
-    // only -r takes a value). For the plain single-letter case -x,
-    // slice(-1) returns "x", so both cases use the same lookup.
-    const isLongFlag = args[i].startsWith("--");
-    const keyRaw = args[i].replace(/^-+/, "").split("=")[0];
-    const lookupKey = isLongFlag ? keyRaw : keyRaw.slice(-1);
-    const matchedOption = Object.entries(cliOptions).find(
-      ([name, opt]) =>
-        (isLongFlag && name === lookupKey) ||
-        (!isLongFlag && "short" in opt && opt.short === lookupKey),
-    );
-    if (matchedOption && matchedOption[1].type === "string" && !args[i].includes("=")) {
-      i++;
-      if (i < args.length) ownArgs.push(args[i]);
+    if (optionTakesValue(arg) && i + 1 < args.length) {
+      ownArgs.push(args[++i]);
     }
   }
 
@@ -151,11 +153,13 @@ async function main() {
     process.exit(1);
   }
 
-  const verbose = values.verbose ?? false;
+  const verbose = values.verbose;
 
   if (verbose) {
-    const version = await getVersion();
-    const viteVersion = await getViteVersion();
+    const [version, viteVersion] = await Promise.all([
+      getVersion(),
+      getViteVersion(),
+    ]);
     console.error(`vite-exec v${version} | vite v${viteVersion}`);
     console.error("---");
   }
@@ -202,23 +206,25 @@ async function main() {
 
   process.argv = [process.execPath, resolvedPath, ...forwardedArgs];
 
+  // createRequire needs a file URL; any filename inside cwd works as the
+  // reference point — the require resolves bare specifiers from cwd.
+  const cwdRequire = createRequire(
+    pathToFileURL(resolve(process.cwd(), "noop.js")).href,
+  );
+
   try {
     for (const mod of values.require ?? []) {
-      if (mod.startsWith(".") || mod.startsWith("/")) {
+      const isLocalPath = mod.startsWith(".") || mod.startsWith("/");
+      if (isLocalPath) {
         await environment.runner.import(resolve(process.cwd(), mod));
       } else {
-        const cwdRequire = createRequire(
-          pathToFileURL(resolve(process.cwd(), "noop.js")).href,
-        );
         await import(cwdRequire.resolve(mod));
       }
     }
     await environment.runner.import(resolvedPath);
   } catch (err) {
-    if (verbose && err instanceof Error) {
-      console.error(err);
-    } else if (err instanceof Error) {
-      console.error(`Error: ${err.message}`);
+    if (err instanceof Error) {
+      console.error(verbose ? err : `Error: ${err.message}`);
     } else {
       console.error("Error:", err);
     }
@@ -270,8 +276,8 @@ async function watchMode(args: string[]) {
     console.error("Error: --delay must be a number");
     process.exit(1);
   }
-  const clearScreen = values.clear ?? false;
-  const quiet = values.quiet ?? false;
+  const clearScreen = values.clear;
+  const quiet = values.quiet;
 
   const ignoredPatterns = [
     "**/node_modules/**",
@@ -359,14 +365,12 @@ async function watchMode(args: string[]) {
     }
   });
 
-  process.on("SIGINT", () => {
-    if (child) child.kill("SIGTERM");
-    process.exit(130);
-  });
-  process.on("SIGTERM", () => {
-    if (child) child.kill("SIGTERM");
-    process.exit(143);
-  });
+  for (const [signal, exitCode] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+    process.on(signal, () => {
+      if (child) child.kill("SIGTERM");
+      process.exit(exitCode);
+    });
+  }
 
   const extList = [...watchExts].join(",");
   log(`[vite-exec] watching for changes (ext: ${extList}, delay: ${delay}ms)...`);
@@ -374,10 +378,9 @@ async function watchMode(args: string[]) {
 }
 
 const args = process.argv.slice(2);
-const run = args.includes("--watch") || args.includes("-w")
-  ? watchMode(args)
-  : main();
-run.catch((err: unknown) => {
+const isWatchMode = args.includes("--watch") || args.includes("-w");
+const entry = isWatchMode ? watchMode(args) : main();
+entry.catch((err: unknown) => {
   console.error(err instanceof Error ? `Error: ${err.message}` : err);
   process.exit(1);
 });
