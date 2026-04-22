@@ -122,6 +122,17 @@ describe("vite-exec", () => {
     assert.equal(exitCode, 0);
   });
 
+  it("injects CJS globals (__dirname, __filename, require)", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/cjs-globals.ts`,
+    ]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("dirname: string"));
+    assert.ok(stdout.includes("filename: string"));
+    assert.ok(stdout.includes("require: function"));
+    assert.ok(stdout.includes("sep: /"));
+  });
+
   it("handles type-only re-exports without the type keyword", async () => {
     const { stdout, exitCode } = await run([
       `${FIXTURES}/type-export/main.ts`,
