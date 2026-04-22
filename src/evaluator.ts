@@ -7,15 +7,26 @@ import {
   ssrImportKey,
   ssrImportMetaKey,
   ssrModuleExportsKey,
+  type EvaluatedModuleNode,
   type ModuleEvaluator,
   type ModuleRunnerContext,
 } from "vite/module-runner";
+
+// The CJS-bridging logic in this file is adapted from Vitest's
+// VitestModuleEvaluator (MIT license, © Vitest contributors). Their
+// implementation handles the Node CJS edge cases we want to match:
+// https://github.com/vitest-dev/vitest/blob/main/packages/vitest/src/runtime/moduleRunner/moduleEvaluator.ts
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
 ) => (...args: unknown[]) => Promise<void>;
 
 type ExportsObject = Record<string | symbol, unknown>;
+
+// Sentinel distinguishing "module.exports never assigned" from "module.exports
+// = undefined". Needed so we only apply Node's primitive-exports-return-undefined
+// rule when module.exports was actually set.
+const MODULE_EXPORTS_UNSET = Symbol("module.exports unset");
 
 function isPrimitive(v: unknown): boolean {
   return (typeof v !== "object" && typeof v !== "function") || v == null;
@@ -59,16 +70,26 @@ function exportAll(exports: ExportsObject, source: unknown): void {
 // share state with Vite's ESM exports namespace (`context[ssrModuleExportsKey]`)
 // so CJS assignments translate cleanly into ESM default + named exports.
 //
-// Semantics match Node.js CJS/ESM interop:
+// Semantics match Node.js CJS/ESM interop, including edge cases:
 //   module.exports = X     → default = X, named exports = enumerable keys of X
 //   exports.foo = X        → named export `foo` = X, and default.foo = X
-//   module.exports = 42    → default = 42, no named exports (primitive)
+//   module.exports = 42    → default = 42; subsequent exports.foo assignments
+//                            create named exports that return undefined
+//                            (Node's primitive-module.exports rule)
+//   .mjs files             → skip the "exports.default = X" → "module.exports = X"
+//                            shortcut (ESM-only files shouldn't behave as CJS)
 //
 // Caveat: reading `module.exports` inside the script returns the proxy, not
 // the raw value that was assigned. This differs from Node CJS but is
 // necessary so that later `exports.foo` assignments still reach the ESM
 // namespace. The common case (assign once, let it be imported) is unaffected.
-function createCJSGlobals(exportsObject: ExportsObject) {
+function createCJSGlobals(
+  exportsObject: ExportsObject,
+  moduleFile: string,
+) {
+  const isEsmOnly = moduleFile.endsWith(".mjs");
+  let moduleExports: unknown = MODULE_EXPORTS_UNSET;
+
   const cjsExports = new Proxy(exportsObject, {
     get: (target, p, receiver) =>
       Reflect.has(target, p)
@@ -76,9 +97,15 @@ function createCJSGlobals(exportsObject: ExportsObject) {
         : Reflect.get(Object.prototype, p, receiver),
     getPrototypeOf: () => Object.prototype,
     set: (_, p, value) => {
-      // `exports.default = X` is treated like `module.exports = X` to avoid
-      // producing nested `default.default` shapes when interop kicks in.
-      if (p === "default" && !isPrimitive(value) && cjsExports !== value) {
+      // `exports.default = X` is treated like `module.exports = X` (so we
+      // don't produce nested `default.default` shapes). Skipped for .mjs
+      // since those files are pure ESM and shouldn't get CJS interop.
+      if (
+        p === "default" &&
+        !isEsmOnly &&
+        !isPrimitive(value) &&
+        cjsExports !== value
+      ) {
         exportAll(cjsExports, value);
         exportsObject.default = value;
         return true;
@@ -86,6 +113,16 @@ function createCJSGlobals(exportsObject: ExportsObject) {
       // Ensure `default` exists so CJS consumers can still destructure from it.
       if (!Reflect.has(exportsObject, "default")) {
         exportsObject.default = {};
+      }
+      // Node CJS rule: once module.exports is set to a primitive, named
+      // exports exist but return undefined. Any subsequent exports.foo =
+      // assignments are effectively no-ops from the importer's perspective.
+      if (
+        moduleExports !== MODULE_EXPORTS_UNSET &&
+        isPrimitive(moduleExports)
+      ) {
+        defineExport(exportsObject, p, () => undefined);
+        return true;
       }
       // Mirror the assignment onto `default` so that `import x from ...` also
       // sees the property (Node's CJS-imported-as-ESM convention).
@@ -106,6 +143,7 @@ function createCJSGlobals(exportsObject: ExportsObject) {
     set exports(value: unknown) {
       exportAll(cjsExports, value);
       exportsObject.default = value;
+      moduleExports = value;
     },
   };
 
@@ -125,11 +163,13 @@ export class CJSModuleEvaluator implements ModuleEvaluator {
   async runInlinedModule(
     context: ModuleRunnerContext,
     code: string,
+    module: Readonly<EvaluatedModuleNode>,
   ): Promise<void> {
     const meta = context[ssrImportMetaKey];
     const require = createRequire(meta.url);
     const { cjsExports, moduleProxy } = createCJSGlobals(
       context[ssrModuleExportsKey],
+      module.file,
     );
     await new AsyncFunction(
       ssrModuleExportsKey,

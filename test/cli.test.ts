@@ -141,6 +141,15 @@ describe("vite-exec", () => {
     assert.ok(stdout.includes("math: 5 6"));
   });
 
+  it("matches Node CJS: primitive module.exports yields undefined named exports", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/cjs-primitive-import.ts`,
+    ]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("default: 42"));
+    assert.ok(stdout.includes("foo: undefined"));
+  });
+
   it("handles type-only re-exports without the type keyword", async () => {
     const { stdout, exitCode } = await run([
       `${FIXTURES}/type-export/main.ts`,
