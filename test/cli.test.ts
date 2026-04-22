@@ -133,6 +133,14 @@ describe("vite-exec", () => {
     assert.ok(stdout.includes("sep: /"));
   });
 
+  it("bridges module.exports and exports.x to ESM imports", async () => {
+    const { stdout, exitCode } = await run([`${FIXTURES}/cjs-import.ts`]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("default: hello world 1.0"));
+    assert.ok(stdout.includes("named: hello world 1.0"));
+    assert.ok(stdout.includes("math: 5 6"));
+  });
+
   it("handles type-only re-exports without the type keyword", async () => {
     const { stdout, exitCode } = await run([
       `${FIXTURES}/type-export/main.ts`,
