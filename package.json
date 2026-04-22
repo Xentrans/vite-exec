@@ -1,7 +1,7 @@
 {
   "name": "vite-exec",
   "version": "0.1.0",
-  "description": "Run JS/TS files through Vite's transform pipeline — a modern replacement for vite-node",
+  "description": "A CLI for running TS/JS files through Vite. Similar to tsx or ts-node, but powered by Vite's ModuleRunner.",
   "type": "module",
   "bin": {
     "vite-exec": "dist/cli.js"
@@ -23,10 +23,13 @@
   },
   "keywords": [
     "vite",
+    "typescript",
+    "ts-node",
+    "tsx",
     "vite-node",
     "module-runner",
-    "typescript",
-    "cli"
+    "cli",
+    "runner"
   ],
   "license": "MIT",
   "dependencies": {

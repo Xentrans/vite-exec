@@ -1,11 +1,10 @@
 # vite-exec
 
-Run JS/TS files through Vite's transform pipeline — a modern replacement for
-[vite-node](https://github.com/antfu-collective/vite-node).
-
-Uses Vite's built-in [Environment API](https://vite.dev/guide/api-environment)
-and `ModuleRunner` instead of the separate `vite-node` package. No dev server,
-no WebSocket, no HMR — just transform and execute.
+A CLI for running TS/JS files through Vite. Similar to
+[tsx](https://github.com/privatenumber/tsx) or
+[ts-node](https://github.com/TypeStrong/ts-node), but powered by Vite's
+[`ModuleRunner`](https://vite.dev/guide/api-environment-runtimes) — your scripts
+see the same transforms, plugins, and resolver as your Vite app.
 
 ## Installation
 
@@ -87,16 +86,33 @@ Powered by Vite's built-in `resolve.tsconfigPaths` option.
    pipeline (TypeScript, JSX, etc.) and executes it on Node.js
 4. Closes the environment and exits
 
-## Differences from vite-node
+## Comparison with other runners
 
-| | vite-exec | vite-node |
-|---|---|---|
-| **Vite API** | Built-in `ModuleRunner` | Custom ViteNodeServer/ViteNodeRunner |
-| **Server** | No dev server | Full Vite dev server |
-| **Dependencies** | `vite` + `chokidar` | `vite-node` package + internals |
-| **Vite version** | Requires Vite 8+ | Works with older Vite versions |
-| **Config** | None (clean environment) | Loads vite.config by default |
-| **Maintenance** | Uses stable Vite APIs | Recommends migrating to Environment API |
+| | vite-exec | tsx | ts-node |
+|---|---|---|---|
+| Engine | Vite | esbuild | TypeScript compiler |
+| Vite plugin support | ✓ | | |
+| TypeScript paths from `tsconfig.json` | ✓ | ✓ | ✓ |
+| `emitDecoratorMetadata` (e.g. TypeORM) | ✓ | | ✓ |
+| Type checking | | | optional |
+| REPL | | ✓ | ✓ |
+| Piped stdin | | ✓ | ✓ |
+| Watch mode | ✓ | ✓ | |
+| Inline eval (`-e`) | ✓ | ✓ | ✓ |
+
+### When to use which
+
+**vite-exec** is worth trying if:
+- You use TypeORM or another library that relies on `emitDecoratorMetadata` +
+  `experimentalDecorators`. tsx (esbuild-based) doesn't emit decorator metadata,
+  so TypeORM entities lose their types at runtime. Vite's transformer handles it.
+- You want scripts to see the same Vite plugins and resolver config as your app.
+
+**tsx** is probably the right default otherwise: it's faster to start, more
+mature, and has features we don't (REPL, piped stdin).
+
+**ts-node** emits decorator metadata but its ESM support has been shaky, and
+the project is less actively maintained at the moment.
 
 ## Requirements
 
