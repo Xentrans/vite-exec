@@ -10,6 +10,12 @@ export async function watchMode(args: string[]) {
   // same CLI but without the watch flag (buildChildArgs strips it).
   const cliPath = resolve(fileURLToPath(import.meta.url), "../cli.js");
   const { values } = parseCliArgs(args);
+
+  if (values.eval !== undefined) {
+    console.error("Error: --eval cannot be combined with --watch.");
+    process.exit(1);
+  }
+
   const childArgs = buildChildArgs(args);
 
   const watchExts = values.ext

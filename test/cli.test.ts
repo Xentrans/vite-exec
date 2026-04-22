@@ -52,11 +52,11 @@ describe("vite-exec", () => {
   });
 
   it("consumes the value for a short flag that takes an argument", async () => {
-    // -e ts must be recognized as flag + value (not two positionals);
+    // -r <mod> must be recognized as flag + value (not two positionals);
     // the file path is the first non-flag arg after the value.
     const { stdout, exitCode } = await run([
-      "-e",
-      "ts",
+      "-r",
+      `${FIXTURES}/preload.ts`,
       `${FIXTURES}/args.ts`,
       "--port",
       "3000",
@@ -81,7 +81,7 @@ describe("vite-exec", () => {
   it("prints usage and exits 1 when no file is specified", async () => {
     const { exitCode, stderr } = await run([]);
     assert.equal(exitCode, 1);
-    assert.ok(stderr.includes("No file specified"));
+    assert.ok(stderr.includes("No file or --eval code specified"));
     assert.ok(stderr.includes("Usage:"));
   });
 
@@ -89,6 +89,66 @@ describe("vite-exec", () => {
     const { exitCode, stderr } = await run(["nonexistent.ts"]);
     assert.equal(exitCode, 1);
     assert.ok(stderr.includes("File not found"));
+  });
+
+  it("runs inline code with -e flag", async () => {
+    const { stdout, exitCode } = await run(["-e", "console.log('hi from eval')"]);
+    assert.equal(exitCode, 0);
+    assert.equal(stdout.trim(), "hi from eval");
+  });
+
+  it("runs inline code with --eval long form", async () => {
+    const { stdout, exitCode } = await run(["--eval", "console.log(2 + 3)"]);
+    assert.equal(exitCode, 0);
+    assert.equal(stdout.trim(), "5");
+  });
+
+  it("eval code sees cwd as __dirname and resolves relative imports from cwd", async () => {
+    const { stdout, exitCode } = await run([
+      "-e",
+      "console.log(__dirname === process.cwd())",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.equal(stdout.trim(), "true");
+  });
+
+  it("forwards positional args to eval code via process.argv", async () => {
+    const { stdout, exitCode } = await run([
+      "-e",
+      "console.log(JSON.stringify(process.argv.slice(2)))",
+      "alpha",
+      "beta",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout.trim()), ["alpha", "beta"]);
+  });
+
+  it("forwards flag-shaped args to eval code", async () => {
+    const { stdout, exitCode } = await run([
+      "-e",
+      "console.log(JSON.stringify(process.argv.slice(2)))",
+      "--port",
+      "3000",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout.trim()), ["--port", "3000"]);
+  });
+
+  it("runs TypeScript syntax in eval code", async () => {
+    const { stdout, exitCode } = await run([
+      "-e",
+      "const x: number = 42; console.log(x)",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.equal(stdout.trim(), "42");
+  });
+
+  it("errors when --watch appears before --eval", async () => {
+    // Flags after -e CODE become script args (per Node's -e convention),
+    // so the only way --watch applies is when it appears BEFORE -e.
+    const { exitCode, stderr } = await run(["-w", "-e", "x"]);
+    assert.equal(exitCode, 1);
+    assert.ok(stderr.includes("--eval cannot be combined with --watch"));
   });
 
   it("prints help with --help", async () => {

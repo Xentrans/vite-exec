@@ -7,6 +7,7 @@ import {
   createRunnableDevEnvironment,
   createServerModuleRunner,
   resolveConfig,
+  type Plugin,
   type RunnableDevEnvironment,
   type ServerModuleRunnerOptions,
 } from "vite";
@@ -40,20 +41,38 @@ export async function main(args: string[]) {
     process.exit(0);
   }
 
+  const evalCode = values.eval;
+  const isEval = evalCode !== undefined;
   const filePath = positionals[0];
-  if (!filePath) {
-    console.error("Error: No file specified.\n");
+
+  if (isEval && values.watch) {
+    console.error("Error: --eval cannot be combined with --watch.");
+    process.exit(1);
+  }
+  if (!isEval && !filePath) {
+    console.error("Error: No file or --eval code specified.\n");
     console.error(help);
     process.exit(1);
   }
 
-  const resolvedPath = resolve(process.cwd(), filePath);
+  // Synthetic absolute path under cwd — never touched on disk. The Vite
+  // plugin below intercepts both resolveId and load for this path, so
+  // Vite never tries to read the file. Using a path inside cwd means that
+  // relative imports from the eval code (e.g. `import "./foo"`) resolve
+  // against cwd naturally, and __dirname/__filename (populated by our
+  // CJSModuleEvaluator from import.meta) are what users expect. The `.ts`
+  // extension tells Vite to apply the TypeScript transform, so eval code
+  // can use TS syntax.
+  const evalId = resolve(process.cwd(), "[eval].ts");
+  const resolvedPath = isEval ? evalId : resolve(process.cwd(), filePath);
 
-  try {
-    accessSync(resolvedPath);
-  } catch {
-    console.error(`Error: File not found: ${filePath}`);
-    process.exit(1);
+  if (!isEval) {
+    try {
+      accessSync(resolvedPath);
+    } catch {
+      console.error(`Error: File not found: ${filePath}`);
+      process.exit(1);
+    }
   }
 
   const verbose = values.verbose;
@@ -67,12 +86,28 @@ export async function main(args: string[]) {
     console.error("---");
   }
 
+  // Synthetic-module plugin for eval mode. Returning the id from resolveId
+  // claims ownership so Vite doesn't try to read evalId from disk; load then
+  // supplies the inline code as the module source.
+  const evalPlugin: Plugin | undefined = isEval
+    ? {
+        name: "vite-exec-eval",
+        resolveId(id) {
+          return id === evalId ? id : null;
+        },
+        load(id) {
+          return id === evalId ? evalCode : null;
+        },
+      }
+    : undefined;
+
   const config = await resolveConfig(
     {
       configFile: false,
       envDir: false,
       logLevel: verbose ? "info" : "silent",
       resolve: { tsconfigPaths: true },
+      plugins: evalPlugin ? [evalPlugin] : [],
       environments: {
         exec: {
           consumer: "server",

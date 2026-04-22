@@ -2,13 +2,15 @@ import { parseArgs } from "node:util";
 
 export const help = `
 Usage: vite-exec [options] <file> [...args]
+       vite-exec -e <code> [...args]
 
-Run a JS/TS file through Vite's transform pipeline.
+Run a JS/TS file (or inline code) through Vite's transform pipeline.
 
 Options:
+  -e, --eval <code>    Run inline code instead of a file
   -r, --require <mod>  Preload a module before running the script (repeatable)
   -w, --watch          Re-run the script when files change
-  -e, --ext <exts>     Extensions to watch, comma-separated (default: ts,js,mjs,mts,json)
+      --ext <exts>     Extensions to watch, comma-separated (default: ts,js,mjs,mts,json)
   -i, --ignore <pat>   Ignore pattern for watch mode (repeatable)
   -d, --delay <ms>     Debounce delay in ms for watch restarts (default: 200)
       --clear          Clear screen before each restart
@@ -19,9 +21,10 @@ Options:
 `.trim();
 
 const cliOptions = {
+  eval: { type: "string" as const, short: "e" },
   require: { type: "string" as const, short: "r", multiple: true, default: [] },
   watch: { type: "boolean" as const, short: "w", default: false },
-  ext: { type: "string" as const, short: "e" },
+  ext: { type: "string" as const },
   ignore: { type: "string" as const, short: "i", multiple: true, default: [] },
   delay: { type: "string" as const, short: "d" },
   clear: { type: "boolean" as const, default: false },
@@ -50,15 +53,22 @@ function optionTakesValue(arg: string): boolean {
   return opt?.type === "string" && !arg.includes("=");
 }
 
+function isEvalFlag(arg: string): boolean {
+  // `-e=...` isn't standard Node/tsx syntax; leave it to parseArgs to handle.
+  return arg === "-e" || arg === "--eval" || arg.startsWith("--eval=");
+}
+
 export function parseCliArgs(args: string[]) {
-  // Split args: everything before the file is for vite-exec,
-  // everything after is forwarded to the script. An explicit
-  // -- also works as a separator.
+  // Split args: everything before the file (or --eval CODE) is for vite-exec,
+  // everything after is forwarded to the script. An explicit `--` also works
+  // as a separator before a file.
   //
   // Examples:
   //   vite-exec --verbose script.ts --port 3000
   //   vite-exec -r dotenv/config script.ts --port 3000
-  //   vite-exec script.ts -- --flag   (-- is forwarded to the script too)
+  //   vite-exec script.ts -- --flag         (-- is forwarded to the script)
+  //   vite-exec -e "code" --port 3000       (--port is forwarded)
+  //   vite-exec -e "code" arg1 arg2         (positionals forwarded)
 
   const ownArgs: string[] = [];
   let forwardedArgs: string[] = [];
@@ -77,6 +87,12 @@ export function parseCliArgs(args: string[]) {
     ownArgs.push(arg);
     if (optionTakesValue(arg) && i + 1 < args.length) {
       ownArgs.push(args[++i]);
+    }
+    // After consuming `-e CODE` / `--eval CODE` / `--eval=CODE`, everything
+    // that follows is forwarded to the script (matches Node's `-e` convention).
+    if (isEvalFlag(arg)) {
+      forwardedArgs = args.slice(i + 1);
+      break;
     }
   }
 
