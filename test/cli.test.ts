@@ -150,6 +150,31 @@ describe("vite-exec", () => {
     assert.ok(stdout.includes("foo: undefined"));
   });
 
+  it("mirrors exports.foo onto the default import", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/cjs-default-mirror-import.ts`,
+    ]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("default.foo: bar"));
+    assert.ok(stdout.includes("default.num: 42"));
+  });
+
+  it("treats exports.default = X like module.exports = X", async () => {
+    const { stdout, exitCode } = await run([
+      `${FIXTURES}/cjs-exports-default-import.ts`,
+    ]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("default: world 2.0"));
+    assert.ok(stdout.includes("named: world 2.0"));
+  });
+
+  it("handles array module.exports without copying indices as named exports", async () => {
+    const { stdout, exitCode } = await run([`${FIXTURES}/cjs-array-import.ts`]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes('default: ["a","b","c"]'));
+    assert.ok(stdout.includes("isArray: true"));
+  });
+
   it("handles type-only re-exports without the type keyword", async () => {
     const { stdout, exitCode } = await run([
       `${FIXTURES}/type-export/main.ts`,
