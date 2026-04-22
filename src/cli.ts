@@ -219,11 +219,7 @@ async function main() {
     }
     await environment.runner.import(resolvedPath);
   } catch (err) {
-    if (err instanceof Error) {
-      console.error(verbose ? err : `Error: ${err.message}`);
-    } else {
-      console.error("Error:", err);
-    }
+    console.error(err);
     await environment.close();
     process.exit(1);
   }
@@ -390,6 +386,6 @@ const args = process.argv.slice(2);
 const isWatchMode = args.includes("--watch") || args.includes("-w");
 const entry = isWatchMode ? watchMode(args) : main();
 entry.catch((err: unknown) => {
-  console.error(err instanceof Error ? `Error: ${err.message}` : err);
+  console.error(err);
   process.exit(1);
 });
