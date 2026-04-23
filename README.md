@@ -114,6 +114,41 @@ mature, and has features we don't (REPL, piped stdin).
 **ts-node** emits decorator metadata but its ESM support has been shaky, and
 the project is less actively maintained at the moment.
 
+## Debugging
+
+vite-exec runs your script in a normal Node.js process, so Node's built-in
+debugger works via the usual environment variable or CLI flag:
+
+```bash
+# Attach with Chrome DevTools / VS Code
+NODE_OPTIONS=--inspect vite-exec script.ts
+
+# Pause on first line
+NODE_OPTIONS=--inspect-brk vite-exec script.ts
+
+# Or via explicit node invocation
+node --inspect ./node_modules/.bin/vite-exec script.ts
+```
+
+**In watch mode**, both the watcher process and the child inherit
+`NODE_OPTIONS`, so they'll try to bind the same debugger port. Use a random
+port to avoid the conflict:
+
+```bash
+NODE_OPTIONS=--inspect=0 vite-exec -w script.ts
+```
+
+Each restart will listen on a fresh port, printed to stderr. Attach to the
+port reported after "change detected".
+
+You can also open the inspector from inside your script:
+
+```ts
+import inspector from "node:inspector";
+inspector.open(0);  // random port
+console.log("debugger listening on", inspector.url());
+```
+
 ## Requirements
 
 - Node.js >= 20.0.0
