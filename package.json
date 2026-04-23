@@ -1,6 +1,6 @@
 {
   "name": "vite-exec",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A CLI for running TS/JS files through Vite. Similar to tsx or ts-node, but powered by Vite's ModuleRunner.",
   "type": "module",
   "bin": {
