@@ -30,8 +30,8 @@ npx vite-exec --watch script.ts
 # Watch only specific extensions
 npx vite-exec -w -e ts,json script.ts
 
-# Watch with custom ignore patterns and delay
-npx vite-exec -w -i "*.test.ts" -d 500 script.ts
+# Watch with custom ignore patterns (glob, repeatable) and delay
+npx vite-exec -w -i "**/*.test.ts" -d 500 script.ts
 
 # Clear screen before each restart
 npx vite-exec -w --clear script.ts
@@ -49,7 +49,7 @@ During watch mode, type `rs` + Enter to manually restart.
 | `-r, --require <mod>` | Preload a module before running the script (repeatable) |
 | `-w, --watch` | Re-run the script when files change |
 | `-e, --ext <exts>` | Extensions to watch, comma-separated (default: `ts,js,mjs,mts,json`) |
-| `-i, --ignore <pat>` | Ignore pattern for watch mode (repeatable) |
+| `-i, --ignore <pat>` | Ignore glob for watch mode, relative to cwd (repeatable). Built-in: `node_modules`, `.git`, `dist`, `coverage`, etc. |
 | `-d, --delay <ms>` | Debounce delay in ms for watch restarts (default: 200) |
 | `--clear` | Clear screen before each restart |
 | `-q, --quiet` | Suppress `[vite-exec]` messages |

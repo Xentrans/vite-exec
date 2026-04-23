@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "@types/picomatch": "^4.0.3",
     "typescript": "^5.8.0"
   },
   "keywords": [
@@ -43,6 +44,7 @@
   },
   "dependencies": {
     "chokidar": "^5.0.0",
+    "picomatch": "^4.0.0",
     "vite": "^8.0.0"
   }
 }

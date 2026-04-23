@@ -1,9 +1,22 @@
 import { extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
+import picomatch from "picomatch";
 import { buildChildArgs, parseCliArgs } from "./args.js";
 
 const DEFAULT_WATCH_EXTS = new Set(["ts", "js", "mjs", "mts", "json"]);
+
+// chokidar 5's `ignored` compares strings by ===; must be a RegExp or function.
+const DEFAULT_IGNORE_RE =
+  /(^|[\\/])(node_modules|\.git|bower_components|\.nyc_output|coverage|\.sass-cache|dist)([\\/]|$)/;
+
+export function buildIgnored(userPatterns: readonly string[], cwd: string) {
+  const userMatchers = userPatterns.map((pattern) => {
+    const isMatch = picomatch(pattern, { dot: true });
+    return (path: string) => isMatch(relative(cwd, path));
+  });
+  return [DEFAULT_IGNORE_RE, ...userMatchers];
+}
 
 export async function watchMode(args: string[]) {
   // Path to this file's own compiled output; spawned children re-enter the
@@ -29,16 +42,8 @@ export async function watchMode(args: string[]) {
   const clearScreen = values.clear;
   const quiet = values.quiet;
 
-  const ignoredPatterns = [
-    "**/node_modules/**",
-    "**/.git/**",
-    "**/bower_components/**",
-    "**/.nyc_output/**",
-    "**/coverage/**",
-    "**/.sass-cache/**",
-    "**/dist/**",
-    ...(values.ignore ?? []),
-  ];
+  const userIgnore = Array.isArray(values.ignore) ? values.ignore : [];
+  const ignored = buildIgnored(userIgnore, process.cwd());
 
   let child: ChildProcess | undefined;
   let restarting = false;
@@ -110,16 +115,19 @@ export async function watchMode(args: string[]) {
   const { watch: chokidarWatch } = await import("chokidar");
   const watcher = chokidarWatch(process.cwd(), {
     ignoreInitial: true,
-    ignored: ignoredPatterns,
+    ignored,
   });
   watcher.on("all", (_event, filePath) => restart(filePath));
+  // Only surface EMFILE: chokidar emits many transient errors (e.g. ENOENT
+  // on rapidly deleted files) that aren't actionable. EMFILE itself can
+  // repeat per-readdir under pressure, so throttle to once per second.
+  let lastEmfileLog = 0;
   watcher.on("error", (err) => {
-    // Only surface EMFILE with a helpful hint; chokidar emits many
-    // transient errors (e.g. ENOENT on rapidly deleted files) that
-    // would spam the user without adding useful information.
-    if ((err as NodeJS.ErrnoException).code === "EMFILE") {
-      log("[vite-exec] too many open files — try closing other programs or raising ulimit");
-    }
+    if ((err as NodeJS.ErrnoException).code !== "EMFILE") return;
+    const now = Date.now();
+    if (now - lastEmfileLog < 1000) return;
+    lastEmfileLog = now;
+    log("[vite-exec] too many open files — try closing other programs or raising ulimit");
   });
 
   // Exit codes: 128 + signal number, per POSIX shell convention.
