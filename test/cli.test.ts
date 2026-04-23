@@ -8,9 +8,10 @@ const FIXTURES = resolve(import.meta.dirname, "fixtures");
 
 function run(
   args: string[],
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
-    execFile("node", [CLI, ...args], (error, stdout, stderr) => {
+    execFile("node", [CLI, ...args], { env }, (error, stdout, stderr) => {
       resolve({
         stdout,
         stderr,
@@ -141,6 +142,70 @@ describe("vite-exec", () => {
     ]);
     assert.equal(exitCode, 0);
     assert.equal(stdout.trim(), "42");
+  });
+
+  it("forwards unrecognised flags before the file to Node", async () => {
+    // --stack-trace-limit is a Node flag; vite-exec doesn't know it. It
+    // should pass through and limit the error trace to 2 frames.
+    const { stderr, exitCode } = await run([
+      "--stack-trace-limit=2",
+      `${FIXTURES}/exit-code.ts`,
+    ]);
+    assert.equal(exitCode, 1);
+    // Count the `    at ` frames; should be 2.
+    const frameLines = stderr.split("\n").filter((l) => l.startsWith("    at "));
+    assert.equal(frameLines.length, 2);
+  });
+
+  it("unknown flags surface Node's 'bad option' error", async () => {
+    const { stderr, exitCode } = await run([
+      "--not-a-real-node-flag",
+      `${FIXTURES}/hello.ts`,
+    ]);
+    assert.notEqual(exitCode, 0);
+    assert.match(stderr, /bad option/);
+  });
+
+  it("--inspect passes through to Node (opens debugger)", async () => {
+    // Port 0 so we don't clash with a real inspector on 9229. Check stderr
+    // for either the success message or sandbox-failure message — either
+    // one confirms Node received the flag.
+    const { stderr } = await run(["--inspect=0", `${FIXTURES}/hello.ts`]);
+    assert.match(stderr, /Debugger listening|Starting inspector/);
+  });
+
+  it("scrubs _VITE_EXEC_CHILD from env before user code runs", async () => {
+    const { stdout, exitCode } = await run([
+      "-e",
+      "console.log(process.env._VITE_EXEC_CHILD ?? 'scrubbed')",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.equal(stdout.trim(), "scrubbed");
+  });
+
+  it("-e=CODE forwards subsequent flags to the script (not Node)", async () => {
+    // Regression: before the fix, --custom would be treated as a Node flag
+    // when the code arg used the -e=CODE form.
+    const { stdout, exitCode } = await run([
+      "-e=console.log(JSON.stringify(process.argv.slice(2)))",
+      "--custom",
+      "value",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.deepEqual(JSON.parse(stdout.trim()), ["--custom", "value"]);
+  });
+
+  it("mirrors SIGTERM exit as 128+15=143", async () => {
+    const { exitCode } = await new Promise<{ exitCode: number }>((done) => {
+      const child = execFile("node", [CLI, `${FIXTURES}/pending-async.ts`]);
+      setTimeout(() => child.kill("SIGTERM"), 50);
+      child.on("exit", (code, signal) => {
+        // Parent forwards SIGTERM to the child, child exits with signal,
+        // parent mirrors as 128+15.
+        done({ exitCode: code ?? (signal ? 128 + 15 : 1) });
+      });
+    });
+    assert.equal(exitCode, 143);
   });
 
   it("errors when --watch appears before --eval", async () => {

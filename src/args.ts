@@ -1,10 +1,13 @@
 import { parseArgs } from "node:util";
 
 export const help = `
-Usage: vite-exec [options] <file> [...args]
-       vite-exec -e <code> [...args]
+Usage: vite-exec [node-flags] [vite-exec options] <file> [...args]
+       vite-exec [node-flags] -e <code> [...args]
 
 Run a JS/TS file (or inline code) through Vite's transform pipeline.
+Any unrecognised flag before the file is forwarded to Node (e.g.
+--inspect, --enable-source-maps, --stack-trace-limit=50). Node flags
+that take values must use the =value form.
 
 Options:
   -e, --eval <code>    Run inline code instead of a file
@@ -54,8 +57,105 @@ function optionTakesValue(arg: string): boolean {
 }
 
 function isEvalFlag(arg: string): boolean {
-  // `-e=...` isn't standard Node/tsx syntax; leave it to parseArgs to handle.
-  return arg === "-e" || arg === "--eval" || arg.startsWith("--eval=");
+  return (
+    arg === "-e" ||
+    arg === "--eval" ||
+    arg.startsWith("--eval=") ||
+    arg.startsWith("-e=")
+  );
+}
+
+// Is this flag one that vite-exec itself handles? Anything else that looks
+// like a flag (starts with `-`) and appears before the first positional is
+// treated as a Node flag and forwarded to the child's node invocation.
+function isOurFlag(arg: string): boolean {
+  if (arg.startsWith("--")) {
+    const name = arg.slice(2).split("=")[0];
+    return name in cliOptions;
+  }
+  // Short form (e.g. -w, -wq). A cluster is ours iff every char maps to
+  // one of our short flags.
+  const chars = arg.slice(1).split("=")[0];
+  if (chars.length === 0) return false;
+  return [...chars].every((c) => shortFlagMap.has(c));
+}
+
+// Translate --inspect-brk to --inspect so Node doesn't pause at our CLI's
+// first line (which is never useful — user code hasn't loaded yet). The
+// child uses the returned `wantInspectBrk` to call inspector.waitForDebugger()
+// immediately before importing the user's script, making the break point
+// land on the user's first line as they'd expect.
+export function translateInspectBrk(nodeFlags: string[]): {
+  nodeFlags: string[];
+  wantInspectBrk: boolean;
+} {
+  let wantInspectBrk = false;
+  const translated = nodeFlags.map((flag) => {
+    if (flag === "--inspect-brk") {
+      wantInspectBrk = true;
+      return "--inspect";
+    }
+    if (flag.startsWith("--inspect-brk=")) {
+      wantInspectBrk = true;
+      return `--inspect=${flag.slice("--inspect-brk=".length)}`;
+    }
+    return flag;
+  });
+  return { nodeFlags: translated, wantInspectBrk };
+}
+
+// Separate Node flags from everything else. The parent passes `nodeFlags`
+// to the child's `node` invocation; `restArgs` becomes the child's argv
+// (vite-exec flags + positional + forwarded script args), ready for
+// parseCliArgs.
+//
+// Grammar assumption: Node flags that take a value must use `--flag=value`
+// form. The space-separated form (`--stack-trace-limit 50`) can't be
+// supported without enumerating every Node flag, which is what we're
+// trying to avoid.
+export function splitArgs(args: string[]): {
+  nodeFlags: string[];
+  restArgs: string[];
+} {
+  const nodeFlags: string[] = [];
+  const restArgs: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // `--` or first positional — hand the rest (file + script args) to the child.
+    if (arg === "--" || !arg.startsWith("-")) {
+      restArgs.push(...args.slice(i));
+      break;
+    }
+
+    if (!isOurFlag(arg)) {
+      nodeFlags.push(arg);
+      continue;
+    }
+
+    // Short flag with equals (e.g. -e=CODE): parseArgs doesn't parse this
+    // form natively for short options, so split into -e + CODE.
+    const isShortWithEquals = !arg.startsWith("--") && arg.includes("=");
+    if (isShortWithEquals) {
+      const eqIdx = arg.indexOf("=");
+      restArgs.push(arg.slice(0, eqIdx), arg.slice(eqIdx + 1));
+    } else {
+      restArgs.push(arg);
+      if (optionTakesValue(arg) && i + 1 < args.length) {
+        restArgs.push(args[++i]);
+      }
+    }
+
+    // After `-e CODE` / `-e=CODE` / `--eval=CODE`, everything else is
+    // forwarded script argv.
+    if (isEvalFlag(arg)) {
+      restArgs.push(...args.slice(i + 1));
+      break;
+    }
+  }
+
+  return { nodeFlags, restArgs };
 }
 
 export function parseCliArgs(args: string[]) {
@@ -109,7 +209,8 @@ export function buildChildArgs(args: string[]): string[] {
   // Reconstruct args from parsed values (not string manipulation) so
   // combined shorts like -wq don't leak. Watch-only options are
   // intentionally dropped — critically, -w is stripped so the child
-  // runs main() instead of re-entering watchMode() and forking forever.
+  // runs the script directly instead of re-entering watch mode and
+  // forking forever.
   const { values, positionals, forwardedArgs } = parseCliArgs(args);
   const childArgs: string[] = [];
 

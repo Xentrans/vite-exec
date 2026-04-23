@@ -1,6 +1,7 @@
 import { extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import picomatch from "picomatch";
 import { buildChildArgs, parseCliArgs } from "./args.js";
 
@@ -18,9 +19,14 @@ export function buildIgnored(userPatterns: readonly string[], cwd: string) {
   return [DEFAULT_IGNORE_RE, ...userMatchers];
 }
 
-export async function watchMode(args: string[]) {
-  // Path to this file's own compiled output; spawned children re-enter the
-  // same CLI but without the watch flag (buildChildArgs strips it).
+export async function watchMode(
+  nodeFlags: string[],
+  args: string[],
+  childEnv: NodeJS.ProcessEnv,
+) {
+  // Path to the CLI's compiled entrypoint; spawned children re-enter the
+  // same file via the _VITE_EXEC_CHILD sentinel so the parent-side dispatch
+  // is skipped.
   const cliPath = resolve(fileURLToPath(import.meta.url), "../cli.js");
   const { values } = parseCliArgs(args);
 
@@ -56,8 +62,14 @@ export async function watchMode(args: string[]) {
   function spawnChild() {
     restarting = false;
     if (clearScreen) process.stderr.write("\x1Bc");
-    child = spawn(process.execPath, [cliPath, ...childArgs], {
-      stdio: ["ignore", "inherit", "inherit"],
+    child = spawn(
+      process.execPath,
+      [...nodeFlags, cliPath, ...childArgs],
+      { stdio: ["ignore", "inherit", "inherit"], env: childEnv },
+    );
+    child.on("error", (err) => {
+      child = undefined;
+      log(`\n[vite-exec] failed to spawn child: ${err.message}`);
     });
     child.on("exit", (code) => {
       child = undefined;
@@ -74,8 +86,13 @@ export async function watchMode(args: string[]) {
     if (restarting) return;
     if (child) {
       restarting = true;
-      child.once("exit", () => spawnChild());
-      child.kill("SIGTERM");
+      const c = child;
+      c.once("exit", () => spawnChild());
+      c.kill("SIGTERM");
+      // Backstop: if SIGTERM is ignored or held (e.g. an attached inspector
+      // waiting for the debugger to disconnect), force-kill after 2s.
+      const force = setTimeout(() => c.kill("SIGKILL"), 2000).unref();
+      c.once("exit", () => clearTimeout(force));
     } else {
       spawnChild();
     }
@@ -131,10 +148,10 @@ export async function watchMode(args: string[]) {
   });
 
   // Exit codes: 128 + signal number, per POSIX shell convention.
-  for (const [signal, exitCode] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
-    process.on(signal, () => {
-      if (child) child.kill("SIGTERM");
-      process.exit(exitCode);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => {
+      child?.kill("SIGTERM");
+      process.exit(128 + (osConstants.signals[sig] ?? 0));
     });
   }
 

@@ -21,6 +21,9 @@ npx vite-exec script.ts
 # Forward arguments to the script (everything after the file)
 npx vite-exec script.ts --port 3000
 
+# Inline eval
+npx vite-exec -e "console.log('hi')"
+
 # Preload a module (like node -r)
 npx vite-exec -r dotenv/config script.ts
 
@@ -28,13 +31,17 @@ npx vite-exec -r dotenv/config script.ts
 npx vite-exec --watch script.ts
 
 # Watch only specific extensions
-npx vite-exec -w -e ts,json script.ts
+npx vite-exec -w --ext ts,json script.ts
 
 # Watch with custom ignore patterns (glob, repeatable) and delay
 npx vite-exec -w -i "**/*.test.ts" -d 500 script.ts
 
 # Clear screen before each restart
 npx vite-exec -w --clear script.ts
+
+# Forward a Node flag (anything unrecognised before the file goes to node)
+npx vite-exec --inspect script.ts
+npx vite-exec --enable-source-maps --stack-trace-limit=20 script.ts
 
 # Enable verbose output
 npx vite-exec --verbose script.ts
@@ -46,9 +53,10 @@ During watch mode, type `rs` + Enter to manually restart.
 
 | Flag | Description |
 |---|---|
+| `-e, --eval <code>` | Run inline code instead of a file |
 | `-r, --require <mod>` | Preload a module before running the script (repeatable) |
 | `-w, --watch` | Re-run the script when files change |
-| `-e, --ext <exts>` | Extensions to watch, comma-separated (default: `ts,js,mjs,mts,json`) |
+| `    --ext <exts>` | Extensions to watch, comma-separated (default: `ts,js,mjs,mts,json`) |
 | `-i, --ignore <pat>` | Ignore glob for watch mode, relative to cwd (repeatable). Built-in: `node_modules`, `.git`, `dist`, `coverage`, etc. |
 | `-d, --delay <ms>` | Debounce delay in ms for watch restarts (default: 200) |
 | `--clear` | Clear screen before each restart |
@@ -56,6 +64,11 @@ During watch mode, type `rs` + Enter to manually restart.
 | `--verbose` | Show diagnostic info |
 | `-h, --help` | Show help |
 | `-v, --version` | Show version |
+
+Any flag before the file that isn't in the table above is treated as a Node
+flag and forwarded — `--inspect`, `--enable-source-maps`,
+`--max-old-space-size=4096`, `--stack-trace-limit=50`, etc. Node flags that
+take a value must use the `--flag=value` form.
 
 ## TypeScript Path Aliases
 
@@ -80,11 +93,31 @@ Powered by Vite's built-in `resolve.tsconfigPaths` option.
 
 ## How it works
 
-1. Resolves a minimal Vite config (no config file loaded)
-2. Creates a standalone `RunnableDevEnvironment` with a `ModuleRunner`
-3. Imports your file through the runner, which transforms it via Vite's plugin
-   pipeline (TypeScript, JSX, etc.) and executes it on Node.js
-4. Closes the environment and exits
+`vite-exec` always runs your script in a **child Node process**:
+
+1. The parent parses argv — anything before the file that isn't a vite-exec
+   flag is treated as a Node flag (`--inspect`, `--enable-source-maps`, etc.)
+2. It spawns `node [...node flags] vite-exec-entry [...vite-exec args]` and
+   forwards stdio, signals, and exit code
+3. The child initialises a standalone Vite `RunnableDevEnvironment` with a
+   `ModuleRunner`, transforms your file via Vite's plugin pipeline
+   (TypeScript, JSX, etc.), and runs it on Node.js
+4. Child exits → parent mirrors the exit code (or `128 + signal` for signal
+   exits)
+
+In watch mode the parent becomes a supervisor — it runs chokidar and
+respawns a fresh child on each change, so side effects (open handles,
+timers, listeners) don't leak across restarts.
+
+The parent/child split is what makes Node flag passthrough work cleanly:
+the watcher (parent) stays clean, and Node flags apply only to the child
+where your script actually runs.
+
+## Debugging
+
+`--inspect` and `--inspect-brk` are forwarded to Node like any other Node
+flag. `--inspect-brk` pauses at the first line of your script rather than
+at vite-exec's entry, so breakpoints can be set before your code runs.
 
 ## Comparison with other runners
 

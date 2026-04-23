@@ -1,8 +1,9 @@
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { accessSync } from "node:fs";
+import { accessSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { url as inspectorUrl, waitForDebugger } from "node:inspector";
 import {
   createRunnableDevEnvironment,
   createServerModuleRunner,
@@ -19,36 +20,17 @@ async function readPkgVersion(pkgPath: string | URL): Promise<string> {
   return pkg.version as string;
 }
 
-function getVersion(): Promise<string> {
-  return readPkgVersion(new URL("../package.json", import.meta.url));
-}
-
-function getViteVersion(): Promise<string> {
-  const vitePkgPath = createRequire(import.meta.url).resolve("vite/package.json");
-  return readPkgVersion(vitePkgPath);
-}
-
-export async function main(args: string[]) {
+// Child-side entry point: parses vite-exec flags and actually runs the
+// script (or inline eval) through Vite. The parent (cli.ts) handled dispatch,
+// --help/--version, and watch mode; this function expects none of those to
+// apply here.
+export async function runScript(args: string[]) {
   const { values, positionals, forwardedArgs } = parseCliArgs(args);
-
-  if (values.help) {
-    console.log(help);
-    process.exit(0);
-  }
-
-  if (values.version) {
-    console.log(await getVersion());
-    process.exit(0);
-  }
 
   const evalCode = values.eval;
   const isEval = evalCode !== undefined;
   const filePath = positionals[0];
 
-  if (isEval && values.watch) {
-    console.error("Error: --eval cannot be combined with --watch.");
-    process.exit(1);
-  }
   if (!isEval && !filePath) {
     console.error("Error: No file or --eval code specified.\n");
     console.error(help);
@@ -79,8 +61,8 @@ export async function main(args: string[]) {
 
   if (verbose) {
     const [version, viteVersion] = await Promise.all([
-      getVersion(),
-      getViteVersion(),
+      readPkgVersion(new URL("../package.json", import.meta.url)),
+      readPkgVersion(createRequire(import.meta.url).resolve("vite/package.json")),
     ]);
     console.error(`vite-exec v${version} | vite v${viteVersion}`);
     console.error("---");
@@ -101,13 +83,36 @@ export async function main(args: string[]) {
       }
     : undefined;
 
+  // When the user asked for --inspect-brk, emit a `debugger;` statement at
+  // the top of the entry script so DevTools pauses on the user's first
+  // line (not on our CLI entry). We compare the plugin's `id` against both
+  // the resolved path AND its realpath, because on macOS /tmp is a symlink
+  // to /private/tmp and Vite may canonicalize.
+  const wantBrk = process.env._VITE_EXEC_INSPECT_BRK === "1";
+  let realResolvedPath: string;
+  try {
+    realResolvedPath = realpathSync(resolvedPath);
+  } catch {
+    realResolvedPath = resolvedPath;
+  }
+  const brkPlugin: Plugin | undefined = wantBrk
+    ? {
+        name: "vite-exec-inspect-brk",
+        enforce: "post",
+        transform(code, id) {
+          if (id !== resolvedPath && id !== realResolvedPath) return null;
+          return { code: `debugger;\n${code}`, map: null };
+        },
+      }
+    : undefined;
+
   const config = await resolveConfig(
     {
       configFile: false,
       envDir: false,
       logLevel: verbose ? "info" : "silent",
       resolve: { tsconfigPaths: true },
-      plugins: evalPlugin ? [evalPlugin] : [],
+      plugins: [evalPlugin, brkPlugin].filter((p): p is Plugin => p != null),
       environments: {
         exec: {
           consumer: "server",
@@ -159,6 +164,18 @@ export async function main(args: string[]) {
       } else {
         await import(cwdRequire.resolve(mod));
       }
+    }
+    // If the user asked for --inspect-brk, the parent replaced it with
+    // --inspect and set this env var. Pause here — right before loading
+    // their script — so DevTools breaks at a useful point instead of at
+    // cli.js:1. waitForDebugger blocks until a debugger attaches and
+    // sends Runtime.runIfWaitingForDebugger (DevTools does this
+    // automatically on connect/resume). Guarded by inspectorUrl() because
+    // waitForDebugger throws ERR_INSPECTOR_NOT_ACTIVE if the inspector
+    // failed to bind (port busy, permission denied, etc.).
+    if (process.env._VITE_EXEC_INSPECT_BRK === "1") {
+      delete process.env._VITE_EXEC_INSPECT_BRK;
+      if (inspectorUrl()) waitForDebugger();
     }
     await environment.runner.import(resolvedPath);
   } catch (err) {
