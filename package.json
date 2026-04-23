@@ -32,6 +32,15 @@
     "runner"
   ],
   "license": "MIT",
+  "author": "Xentelligent Ltd.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xentrans/vite-exec.git"
+  },
+  "homepage": "https://github.com/Xentrans/vite-exec#readme",
+  "bugs": {
+    "url": "https://github.com/Xentrans/vite-exec/issues"
+  },
   "dependencies": {
     "chokidar": "^5.0.0",
     "vite": "^8.0.0"
