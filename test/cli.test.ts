@@ -328,3 +328,93 @@ describe("vite-exec", () => {
     assert.ok(stderr.includes("vite v"));
   });
 });
+
+// These tests exercise the loader hook that routes native `import(".ts")`
+// calls from externalized libraries (e.g. TypeORM's CLI) back through the
+// ModuleRunner. ext-harness/index.js simulates the pattern by doing
+// `Function("return s => import(s)")()(path)` — without the hook this would
+// fail with `Unknown file extension ".ts"`.
+describe("loader hook for externalized imports", () => {
+  const EXT_HARNESS = `${FIXTURES}/ext-harness/index.js`;
+  const TARGET = (name: string) => `${FIXTURES}/loader-hook/${name}`;
+
+  it("exposes a .ts default export as mod.default directly (not double-wrapped)", async () => {
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("default-export.ts")]);
+    assert.equal(exitCode, 0);
+    // default is an object with kind="DS"; the "marker" field in ext-harness
+    // picks up the .kind. If default were double-wrapped, ctor would be
+    // "Object" but marker would be missing (kind would live one level deeper).
+    assert.ok(stdout.includes("EXT:default:object:Object:DS"), stdout);
+  });
+
+  it("exposes both default and named exports when they coexist", async () => {
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("mixed-exports.ts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("default:object:Object:DS"), stdout);
+    assert.ok(stdout.includes("helper:object:Object:HLP"), stdout);
+  });
+
+  it("exposes named-only exports", async () => {
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("named-only.ts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("AppDS:object:Object:APP"), stdout);
+    assert.ok(stdout.includes("Other:object:Object:OTHER"), stdout);
+  });
+
+  it("handles circular imports without TDZ errors", async () => {
+    const { stdout, stderr, exitCode } = await run([EXT_HARNESS, TARGET("circular-a.ts")]);
+    assert.equal(exitCode, 0, `stderr: ${stderr}`);
+    assert.ok(stdout.includes("circular-a loaded"), stdout);
+    assert.ok(stdout.includes("circular-b loaded"), stdout);
+    assert.ok(!stderr.includes("before initialization"), stderr);
+  });
+
+  it("emits decorator metadata via the ModuleRunner's tsconfig-driven transform", async () => {
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("entity.ts")]);
+    assert.equal(exitCode, 0);
+    // Vite 8 auto-picks up the fixture's tsconfig (experimentalDecorators +
+    // emitDecoratorMetadata), so Reflect.getMetadata yields real types.
+    assert.ok(stdout.includes("ENTITY:id=Number,name=String"), stdout);
+  });
+
+  it("applies the same hook to .mts files", async () => {
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("decorated.mts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("MTS:n=Number"), stdout);
+  });
+
+  it("handles primitive default with coexisting named exports (fallback path)", async () => {
+    // `export default 42` can't be the stub's module.exports (Node's CJS→ESM
+    // would strip it) and we can't attach named siblings to a primitive, so
+    // the stub falls back to exports.default. Default becomes double-wrapped
+    // but the named export is reachable — which is the important property.
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("primitive-default.ts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("helper:object:Object:HLP"), stdout);
+  });
+
+  it("caches the stub: two native import()s of the same .ts yield identical namespaces", async () => {
+    // Regression guard for the Map.delete() in the stub. If Node weren't
+    // caching, the second import would re-fire our hook; if that happened
+    // AND the delete happened before re-read, the second call would throw
+    // "module not loaded via runner". Asserting namespace identity also
+    // guards against a silent double-load (which would hand consumers two
+    // different exports objects for the same URL — a subtle data-race-
+    // style bug).
+    const DOUBLE = `${FIXTURES}/ext-harness/double.js`;
+    const { stdout, exitCode } = await run([DOUBLE, TARGET("default-export.ts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("DOUBLE:ns=true:default=true"), stdout);
+  });
+
+  it("propagates errors from the user .ts file with .code preserved", async () => {
+    // The ModuleRunner evaluates throws-at-toplevel.ts, which throws an
+    // Error with a custom .code. That error travels back over the
+    // MessagePort (structured clone preserves .code), through Node's
+    // dynamic import() rejection, and into ext-harness's catch.
+    const { stdout, exitCode } = await run([EXT_HARNESS, TARGET("throws-at-toplevel.ts")]);
+    assert.equal(exitCode, 2);
+    assert.ok(stdout.includes("EXTERR:ERR_FIXTURE_TOP_LEVEL:"), stdout);
+    assert.ok(stdout.includes("fixture error"), stdout);
+  });
+});

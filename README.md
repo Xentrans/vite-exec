@@ -127,6 +127,7 @@ at vite-exec's entry, so breakpoints can be set before your code runs.
 | Vite plugin support | ✓ | | |
 | TypeScript paths from `tsconfig.json` | ✓ | ✓ | ✓ |
 | `emitDecoratorMetadata` (e.g. TypeORM) | ✓ | | ✓ |
+| Tools that dynamically `import()` your `.ts` files (e.g. TypeORM CLI) | ✓ | | |
 | Type checking | | | optional |
 | REPL | | ✓ | ✓ |
 | Piped stdin | | ✓ | ✓ |
@@ -139,6 +140,11 @@ at vite-exec's entry, so breakpoints can be set before your code runs.
 - You use TypeORM or another library that relies on `emitDecoratorMetadata` +
   `experimentalDecorators`. tsx (esbuild-based) doesn't emit decorator metadata,
   so TypeORM entities lose their types at runtime. Vite's transformer handles it.
+- You want tools like the TypeORM or Vitest CLIs to be able to import your
+  `.ts` source files directly. vite-exec installs a Node loader hook that
+  routes native `import()` of `.ts` paths back through Vite's ModuleRunner,
+  so e.g. `typeorm migration:generate -d src/dataSource.ts` works without a
+  prior `tsc` build.
 - You want scripts to see the same Vite plugins and resolver config as your app.
 
 **tsx** is probably the right default otherwise: it's faster to start, more

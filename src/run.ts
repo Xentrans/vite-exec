@@ -15,6 +15,11 @@ import {
 import { help, parseCliArgs } from "./args.js";
 import { CJSModuleEvaluator } from "./evaluator.js";
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __vite_exec_modules: Map<string, unknown>;
+}
+
 async function readPkgVersion(pkgPath: string | URL): Promise<string> {
   const pkg = JSON.parse(await readFile(pkgPath, "utf-8"));
   return pkg.version as string;
@@ -147,6 +152,53 @@ export async function runScript(args: string[]) {
   );
 
   await environment.init();
+
+  // Route native `import(".ts")` from externalized code back through the
+  // ModuleRunner on this main thread. See src/loader.ts for the hook side.
+  //
+  // The handler must be wired *after* environment.init() — it closes over
+  // environment.runner, which isn't usable until init resolves. port1.unref()
+  // keeps the open port from holding the event loop alive once user code
+  // settles (the process would otherwise hang on exit).
+  globalThis.__vite_exec_modules = new Map<string, unknown>();
+  {
+    const { MessageChannel } = await import("node:worker_threads");
+    const { register } = await import("node:module");
+    const { port1, port2 } = new MessageChannel();
+    port1.on("message", async ({ id, url }: { id: number; url: string }) => {
+      try {
+        const mod = await environment.runner.import(url);
+        globalThis.__vite_exec_modules.set(url, mod);
+        // Send export names so the worker's CJS stub can emit static
+        // `exports.X = m.X` assignments that cjs-module-lexer picks up —
+        // otherwise Node's CJS→ESM interop can't expose named exports from
+        // our runtime-assigned module.exports.
+        port1.postMessage({ id, ok: true, names: Object.keys(mod as object) });
+      } catch (err) {
+        // Manually pack the error so the loader thread can reconstruct one
+        // with matching properties. Structured-cloning an Error preserves
+        // name/message/stack/cause but drops custom own properties like
+        // `.code`, which callers (e.g. code branching on ERR_MODULE_NOT_FOUND)
+        // need. Copying own props catches those.
+        let payload: unknown;
+        if (err instanceof Error) {
+          const own: Record<string, unknown> = {};
+          for (const key of Object.getOwnPropertyNames(err)) {
+            own[key] = (err as unknown as Record<string, unknown>)[key];
+          }
+          payload = { __viteExecError: true, name: err.name, message: err.message, stack: err.stack, own };
+        } else {
+          payload = { __viteExecError: false, value: String(err) };
+        }
+        port1.postMessage({ id, error: payload });
+      }
+    });
+    port1.unref();
+    register("./loader.js", import.meta.url, {
+      data: { port: port2 },
+      transferList: [port2],
+    });
+  }
 
   process.argv = [process.execPath, resolvedPath, ...forwardedArgs];
 
