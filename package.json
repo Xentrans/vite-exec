@@ -11,6 +11,8 @@
   ],
   "scripts": {
     "build": "tsc",
+    "lint": "oxlint --deny-warnings",
+    "lint:fix": "oxlint --fix",
     "pretest": "npm run build",
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
@@ -20,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@types/picomatch": "^4.0.3",
+    "oxlint": "^1.61.0",
     "reflect-metadata": "^0.2.2",
     "typescript": "^5.8.0"
   },
