@@ -102,7 +102,11 @@ Powered by Vite's built-in `resolve.tsconfigPaths` option.
 3. The child initialises a standalone Vite `RunnableDevEnvironment` with a
    `ModuleRunner`, transforms your file via Vite's plugin pipeline
    (TypeScript, JSX, etc.), and runs it on Node.js
-4. Child exits → parent mirrors the exit code (or `128 + signal` for signal
+4. A Node ESM loader hook is registered alongside the ModuleRunner, so that
+   native `import(".ts")` calls made by externalized libraries (e.g. TypeORM's
+   CLI doing `import(dataSourcePath)`) are delegated back to the ModuleRunner
+   instead of hitting Node's TypeScript-agnostic loader
+5. Child exits → parent mirrors the exit code (or `128 + signal` for signal
    exits)
 
 In watch mode the parent becomes a supervisor — it runs chokidar and
