@@ -407,6 +407,33 @@ describe("loader hook for externalized imports", () => {
     assert.ok(stdout.includes("DOUBLE:ns=true:default=true"), stdout);
   });
 
+  it("does not double-expose a named-only class via recursive namespace walk", async () => {
+    // Regression guard for a real TypeORM bug hit in user migrations:
+    // TypeORM's DirectoryExportedClassesLoader recurses into the imported
+    // namespace via Object.values and collects every function it finds.
+    // Without an __esModule marker, Node's CJS→ESM interop echoes
+    // module.exports back as `mod.default`, so `{default: {SomeMig}, SomeMig}`
+    // makes the recursive walk find the class twice.
+    const REC = `${FIXTURES}/ext-harness/recursive-classes.js`;
+    const { stdout, exitCode } = await run([REC, TARGET("migration-shape.ts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("RECURSIVE:found=1:unique=1"), stdout);
+  });
+
+  it("de-duplicates when a named export is the same value as default", async () => {
+    // Regression for a real TypeORM bug: `export default class Foo {}` + a
+    // named `Foo` export produced two Object.keys entries pointing at the
+    // same class, so TypeORM's migration loader saw each migration twice.
+    // The stub now identity-skips named-sibling assignments that alias the
+    // default — the key still appears (cjs-module-lexer sees it statically)
+    // but its runtime value is undefined, so iterators filtering falsy
+    // values pick up the class once.
+    const UNIQ = `${FIXTURES}/ext-harness/unique-values.js`;
+    const { stdout, exitCode } = await run([UNIQ, TARGET("default-aliased-as-named.ts")]);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes("UNIQ:keys=2:distinct=1"), stdout);
+  });
+
   it("propagates errors from the user .ts file with .code preserved", async () => {
     // The ModuleRunner evaluates throws-at-toplevel.ts, which throws an
     // Error with a custom .code. That error travels back over the

@@ -116,6 +116,18 @@ export async function load(
   // primitives, null, or frozen objects we fall back to the `exports.default =
   // …` path (which double-wraps default, but TypeORM's pattern doesn't hit
   // those cases — nobody has `export default 42` as a data source).
+  // Emit each named export as a *non-enumerable* property. cjs-module-lexer
+  // still detects the name statically, so consumers get `import { X }`
+  // working, but `Object.values(module.exports)` skips them. This matters
+  // because Node's CJS→ESM interop always exposes `mod.default = module.exports`
+  // — so a consumer that recursively walks `Object.values(namespace)` (e.g.
+  // TypeORM's DirectoryExportedClassesLoader) would otherwise find every
+  // named class twice: once directly, once nested under default. Non-enumerable
+  // makes the nested path invisible.
+  const defineNonEnum = (target: string, name: string) => {
+    const rhs = SAFE_ID.test(name) ? `m.${name}` : `m[${JSON.stringify(name)}]`;
+    return `Object.defineProperty(${target}, ${JSON.stringify(name)}, { value: ${rhs}, enumerable: false, writable: true, configurable: true });`;
+  };
   const nonDefault = names.filter((n) => n !== "default");
   if (names.includes("default")) {
     const mutationTarget = nonDefault.length > 0;
@@ -125,13 +137,20 @@ export async function load(
         `if (__d != null && (typeof __d === "object" || typeof __d === "function") && Object.isExtensible(__d)) {`,
       );
       lines.push(`  module.exports = __d;`);
+      // Identity-check each sibling: if a named export is the same reference
+      // as the default (e.g. `export class Foo {}; export default Foo`), skip
+      // the assignment entirely. The lexer-detected name still appears in
+      // Object.keys(namespace), but its runtime value stays undefined, so
+      // iterators filtering for truthy/function values pick up the class once.
       for (const n of nonDefault) {
-        lines.push(`  ${member("module.exports", n)} = ${member("m", n)};`);
+        lines.push(
+          `  if (${member("m", n)} !== __d) ${defineNonEnum("module.exports", n)}`,
+        );
       }
       lines.push(`} else {`);
       lines.push(`  exports.default = __d;`);
       for (const n of nonDefault) {
-        lines.push(`  ${member("exports", n)} = ${member("m", n)};`);
+        lines.push(`  if (${member("m", n)} !== __d) ${defineNonEnum("exports", n)}`);
       }
       lines.push(`}`);
     } else {
@@ -139,7 +158,7 @@ export async function load(
     }
   } else {
     for (const n of names) {
-      lines.push(`${member("exports", n)} = ${member("m", n)};`);
+      lines.push(defineNonEnum("exports", n));
     }
   }
   return {
