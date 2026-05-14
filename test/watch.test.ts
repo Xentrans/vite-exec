@@ -1,11 +1,25 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import type { Stats } from "node:fs";
 import { buildIgnored } from "../dist/watch.js";
 
 const CWD = "/tmp/proj";
 
-function matches(ignored: ReturnType<typeof buildIgnored>, path: string) {
-  return ignored.some((m) => (m instanceof RegExp ? m.test(path) : m(path)));
+function matches(ignored: ReturnType<typeof buildIgnored>, path: string, stats?: Stats) {
+  return ignored.some((m) => (m instanceof RegExp ? m.test(path) : m(path, stats)));
+}
+
+function fakeStats(overrides: Partial<Record<keyof Stats, boolean>>): Stats {
+  const flags = { isFIFO: false, isSocket: false, isCharacterDevice: false, isBlockDevice: false, ...overrides };
+  return {
+    isFIFO: () => flags.isFIFO,
+    isSocket: () => flags.isSocket,
+    isCharacterDevice: () => flags.isCharacterDevice,
+    isBlockDevice: () => flags.isBlockDevice,
+    isFile: () => true,
+    isDirectory: () => false,
+    isSymbolicLink: () => false,
+  } as unknown as Stats;
 }
 
 describe("buildIgnored", () => {
@@ -37,5 +51,25 @@ describe("buildIgnored", () => {
     const ignored = buildIgnored(["**/.env*"], CWD);
     assert.ok(matches(ignored, `${CWD}/.env`));
     assert.ok(matches(ignored, `${CWD}/packages/a/.env.local`));
+  });
+
+  it("ignores FIFOs, sockets, and device files when stats are available", () => {
+    const ignored = buildIgnored([], CWD);
+    assert.ok(matches(ignored, `${CWD}/.env`, fakeStats({ isFIFO: true })));
+    assert.ok(matches(ignored, `${CWD}/app.sock`, fakeStats({ isSocket: true })));
+    assert.ok(matches(ignored, `${CWD}/dev-char`, fakeStats({ isCharacterDevice: true })));
+    assert.ok(matches(ignored, `${CWD}/dev-blk`, fakeStats({ isBlockDevice: true })));
+  });
+
+  it("does not ignore regular files when stats indicate a regular file", () => {
+    const ignored = buildIgnored([], CWD);
+    assert.ok(!matches(ignored, `${CWD}/src/index.ts`, fakeStats({})));
+  });
+
+  it("does not ignore on the stats-less first pass", () => {
+    // chokidar calls the ignore fn twice — first path-only, then with stats.
+    // The first call must not pre-emptively drop paths it can't classify.
+    const ignored = buildIgnored([], CWD);
+    assert.ok(!matches(ignored, `${CWD}/.env`));
   });
 });

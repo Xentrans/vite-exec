@@ -57,7 +57,7 @@ During watch mode, type `rs` + Enter to manually restart.
 | `-r, --require <mod>` | Preload a module before running the script (repeatable) |
 | `-w, --watch` | Re-run the script when files change |
 | `    --ext <exts>` | Extensions to watch, comma-separated (default: `ts,js,mjs,mts,json`) |
-| `-i, --ignore <pat>` | Ignore glob for watch mode, relative to cwd (repeatable). Built-in: `node_modules`, `.git`, `dist`, `coverage`, etc. |
+| `-i, --ignore <pat>` | Ignore glob for watch mode, relative to cwd (repeatable). Built-in: `node_modules`, `.git`, `dist`, `coverage`, etc. Non-regular files (FIFOs, sockets, device files) are also skipped automatically — handy when tools like `op run --env-file` expose `.env` as a FIFO. |
 | `-d, --delay <ms>` | Debounce delay in ms for watch restarts (default: 200) |
 | `--clear` | Clear screen before each restart |
 | `-q, --quiet` | Suppress `[vite-exec]` messages |
