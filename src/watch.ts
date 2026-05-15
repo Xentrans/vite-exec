@@ -2,6 +2,7 @@ import { extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants as osConstants } from "node:os";
+import type { Stats } from "node:fs";
 import picomatch from "picomatch";
 import { buildChildArgs, parseCliArgs } from "./args.js";
 
@@ -11,12 +12,21 @@ const DEFAULT_WATCH_EXTS = new Set(["ts", "js", "mjs", "mts", "json"]);
 const DEFAULT_IGNORE_RE =
   /(^|[\\/])(node_modules|\.git|bower_components|\.nyc_output|coverage|\.sass-cache|dist)([\\/]|$)/;
 
+// Skip non-regular files (FIFOs, sockets, char/block devices). Reading them
+// can block indefinitely (e.g. 1Password's `op run --env-file` exposes .env
+// as a FIFO). Chokidar invokes the fn twice: first path-only (stats undef),
+// then with stats once stat() resolves; only the second call can decide.
+function isSpecialFile(_path: string, stats?: Stats) {
+  if (!stats) return false;
+  return stats.isFIFO() || stats.isSocket() || stats.isCharacterDevice() || stats.isBlockDevice();
+}
+
 export function buildIgnored(userPatterns: readonly string[], cwd: string) {
   const userMatchers = userPatterns.map((pattern) => {
     const isMatch = picomatch(pattern, { dot: true });
     return (path: string) => isMatch(relative(cwd, path));
   });
-  return [DEFAULT_IGNORE_RE, ...userMatchers];
+  return [DEFAULT_IGNORE_RE, isSpecialFile, ...userMatchers];
 }
 
 export async function watchMode(
